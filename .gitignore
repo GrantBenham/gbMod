@@ -1,0 +1,12 @@
+# Specific R files to ignore
+appold.R
+appold2.R
+
+# PDF files
+*.pdf
+
+# SSH 2024 data files
+SSH*2024*
+
+# Backup folder
+BACKUP/ 
