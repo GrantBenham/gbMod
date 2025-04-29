@@ -17,4 +17,25 @@ BACKUP/
 .RData
 .Ruserdata
 *.Rproj
-.Rproj.user/ 
+.Rproj.user/
+
+# RStudio Connect
+rsconnect/
+*.dcf
+
+# Existing ignores
+appold.R
+appold2.R
+*.pdf
+SSH*2024*
+BACKUP/
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+.Rproj.user/
+
+# RStudio Connect
+rsconnect/
+*.dcf 
