@@ -1,69 +1,118 @@
 # gbMod
-Moderation analysis using Hayes' PROCESS R shinyapp
+Moderation Analysis using Hayes' PROCESS - R Shiny Application
 
 ## Overview
-gbMod is a comprehensive Shiny application designed to guide users through the process of conducting Exploratory Factor Analysis (EFA) in a systematic and rigorous manner. The application follows best practices in factor analysis and provides detailed diagnostics at each step of the analysis process.
+gbMod is a comprehensive Shiny application designed to conduct moderation analysis using Hayes' PROCESS methodology. The application provides an intuitive interface for testing interaction effects between variables, with robust diagnostic capabilities and detailed visualization options.
 
-## Program Structure
-The application is built using R Shiny and consists of five integrated modules:
+## Features
 
-### 1. Introduction (mod0_introduction.R)
-- Provides an overview of the application and its workflow
-- Explains the purpose and features of each module
-- Guides users through the analysis process
+### Core Analysis
+- **Moderation Analysis**: Implements Hayes' PROCESS Model 1 for testing interaction effects
+- **Variable Selection**: Support for outcome, predictor, moderator, and optional covariate variables
+- **Data Formats**: Accepts both CSV and SPSS (.sav) file formats
+- **Bootstrapping**: Optional bootstrap confidence intervals for enhanced statistical inference
 
-### 2. Multicollinearity Check (mod1_multicollinearity.R)
-- Assesses and addresses multicollinearity in the data
-- Features:
-  - Variance Inflation Factor (VIF) analysis
-  - Correlation matrix determinant evaluation
-  - Automated identification of problematic variables
-  - Option to download cleaned dataset
+### Diagnostic Capabilities
+- **Assumption Checks**: Comprehensive evaluation of regression assumptions
+  - Normality of residuals (Shapiro-Wilk test and Q-Q plots)
+  - Homoscedasticity (Breusch-Pagan test)
+  - Multicollinearity (VIF analysis)
+  - Outlier detection using standardized residuals
+- **Interactive Plots**: Diagnostic plots with outlier highlighting
+- **Real-time Updates**: Assumption checks update automatically based on variable selection
 
-### 3. Factor Estimation (mod2_factors.R)
-- Determines the optimal number of factors to extract
-- Features:
-  - Multiple factor retention criteria (Kaiser criterion, Parallel analysis, Velicer's MAP test)
-  - Interactive scree plot
-  - Very Simple Structure (VSS) analysis
-  - Comprehensive interpretation guidelines
+### Visualization Options
+- **Johnson-Neyman Plot**: Identifies regions of significance for the moderator
+- **Simple Slopes Plot**: Visualizes interaction effects at different moderator levels
+- **Customizable Plotting**: 
+  - Color vs. line type options
+  - Custom axis labels and titles
+  - Adjustable y-axis ranges
+  - Decimal precision control
 
-### 4. Diagnostics (mod3_diagnostics.R)
-- Evaluates data suitability for factor analysis
-- Features:
-  - Sampling adequacy tests (KMO, Bartlett's test)
-  - Normality assessment (univariate and multivariate)
-  - Correlation matrix analysis
-  - Interactive correlation heatmap
+### Analysis Settings
+- **Centering Options**: No centering, mean centering, or standardization
+- **Conditioning Values**: Mean ±1 SD or 16th/50th/84th percentiles
+- **Heteroscedasticity-Consistent Standard Errors**: Multiple HC estimators (HC0-HC4)
+- **Outlier Handling**: Option to run analysis with or without standardized residual outliers
 
-### 5. Exploratory Factor Analysis (mod4_efa.R)
-- Performs the final EFA with optimal settings
-- Features:
-  - Multiple extraction methods (Principal Axis Factoring, Minimum Residual)
-  - Various rotation options (Promax, Varimax, Oblimin, Quartimax)
-  - Correlation matrix options (Pearson, Spearman, Polychoric)
-  - Customizable thresholds for factor loadings and communalities
-  - Iterative refinement process
-  - Comprehensive reliability analysis (Cronbach's alpha, McDonald's omega)
-  - Detailed results export options
+### Export Capabilities
+- **Results Download**: HTML-formatted analysis results
+- **Plot Downloads**: High-quality JPG images of Johnson-Neyman and simple slopes plots
+- **Filtered Dataset**: Download dataset with outliers removed (CSV or SAV format)
 
-## Usage
-1. Start with the Multicollinearity Check tab to prepare your data
-2. Use the Factor Estimation tab to determine the optimal number of factors
-3. Review your data's suitability in the Diagnostics tab
-4. Finally, perform the EFA in the Exploratory Factor Analysis tab
+## Usage Instructions
 
-## Technical Details
-- Built using R Shiny framework
-- Modular architecture for easy maintenance and updates
-- Each module is self-contained with its own UI and server logic
-- Comprehensive error handling and user feedback
-- Export capabilities for results and cleaned datasets
+### 1. Data Preparation
+- Prepare your dataset in CSV or SPSS (.sav) format
+- Ensure variables are numeric for analysis
+- Include all variables you plan to use in the analysis
 
-## Requirements
-- R (version 3.6.0 or higher)
-- Shiny package
-- Additional dependencies as specified in the program files
+### 2. Upload and Variable Selection
+- Upload your data file using the file input
+- Select your outcome variable (dependent variable)
+- Select your predictor variable (independent variable)
+- Select your moderator variable
+- Optionally add covariates if needed
 
-## Note
-Each module provides detailed interpretations and recommendations to help users make informed decisions throughout the analysis process.
+### 3. Configure Analysis Settings
+- Choose centering method (recommended: mean centering)
+- Select conditioning values for simple slopes
+- Decide whether to use bootstrapping
+- Choose heteroscedasticity-consistent standard errors if needed
+
+### 4. Review Assumptions
+- Check the "Assumption Checks" tab for diagnostic information
+- Review standardized residual outliers
+- Examine diagnostic plots for normality and homoscedasticity
+- Consider the impact of outliers on your analysis
+
+### 5. Run Analysis
+- Choose "With Original Dataset" to include all cases
+- Choose "With Outliers Removed" to exclude cases above the residual threshold
+- Review results in the "Moderation Analysis" tab
+
+### 6. Interpret Results
+- Examine the interaction test for statistical significance
+- Review conditional effects at different moderator levels
+- Use Johnson-Neyman plot to identify regions of significance
+- Interpret simple slopes plot for practical significance
+
+### 7. Export Results
+- Download formatted results for reporting
+- Save plots for presentations or publications
+- Export filtered dataset if outliers were removed
+
+## Technical Requirements
+- **R Version**: 3.6.0 or higher
+- **Required Packages**:
+  - shiny
+  - bslib
+  - ggplot2
+  - stringr
+  - dplyr
+  - shinyjs
+  - car (for VIF and heteroscedasticity tests)
+  - haven (for SPSS file support)
+
+## Best Practices
+- **Sample Size**: Ensure adequate sample size for moderation analysis (typically N > 100)
+- **Variable Quality**: Use reliable and valid measures for all variables
+- **Assumption Checking**: Always review diagnostic plots and tests
+- **Outlier Handling**: Document any cases removed and justify the decision
+- **Effect Size**: Consider practical significance in addition to statistical significance
+- **Bootstrapping**: Use bootstrapping for more robust inference, especially with non-normal data
+
+## Interpretation Guidelines
+- **Interaction Effect**: Focus on the R² change and p-value for the interaction term
+- **Conditional Effects**: Examine how the predictor's effect varies across moderator levels
+- **Johnson-Neyman**: Use to identify specific moderator values where effects become significant
+- **Simple Slopes**: Visualize the nature and direction of interaction effects
+- **Effect Sizes**: Consider both statistical and practical significance of findings
+
+## Support
+For questions or issues with the application, please refer to the diagnostic information provided within the app or consult Hayes' PROCESS documentation for theoretical guidance on moderation analysis.
+
+## Citation
+When using this application, please cite:
+- Hayes, A. F. (2022). Introduction to mediation, moderation, and conditional process analysis: A regression-based approach (3rd ed.). Guilford Press.
