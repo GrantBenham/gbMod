@@ -522,8 +522,26 @@ server <- function(input, output, session) {
       )
       
       # Prepare process arguments
+      # Get all variables needed for analysis
+      all_vars_orig <- c(input$outcome_var, input$predictor_var, input$moderator_var)
+      if(length(input$covariates) > 0) {
+        all_vars_orig <- c(all_vars_orig, input$covariates)
+      }
+      
+      # Check complete cases for original dataset
+      complete_cases_orig <- complete.cases(rv$original_dataset[all_vars_orig])
+      n_complete_orig <- sum(complete_cases_orig)
+      
+      # Validate that we have enough complete cases
+      if(n_complete_orig < 3) {
+        stop(sprintf("Only %d complete cases available in the original dataset. This is insufficient for moderation analysis. Please check for missing data in your variables.", n_complete_orig))
+      }
+      
+      # Use complete cases only to avoid PROCESS errors
+      process_data_orig <- rv$original_dataset[complete_cases_orig, ]
+      
       process_args <- list(
-        data = rv$original_dataset,
+        data = process_data_orig,
         y = input$outcome_var,
         x = input$predictor_var,
         w = input$moderator_var,
@@ -607,8 +625,8 @@ server <- function(input, output, session) {
       
       list(
         output = process_output, 
-        data_used = rv$original_dataset,
-        original_data = rv$original_dataset,  # Add original dataset for bivariate correlations
+        data_used = process_data_orig,  # Use processed data (complete cases)
+        original_data = rv$original_dataset,  # Keep original for bivariate correlations
         coefficients = coefficients,
         correlation_info = correlation_info,
         settings = analysis_settings  # Add settings to the output
@@ -643,6 +661,22 @@ server <- function(input, output, session) {
       )
       reduced_data <- rv$original_dataset[-outliers$cases, ]
       
+      # Check for complete cases after outlier removal
+      # Get all variables needed for analysis
+      all_vars <- c(input$outcome_var, input$predictor_var, input$moderator_var)
+      if(length(input$covariates) > 0) {
+        all_vars <- c(all_vars, input$covariates)
+      }
+      
+      # Check complete cases
+      complete_cases <- complete.cases(reduced_data[all_vars])
+      n_complete <- sum(complete_cases)
+      
+      # Validate that we have enough complete cases
+      if(n_complete < 3) {
+        stop(sprintf("After removing outliers, only %d complete cases remain. This is insufficient for moderation analysis. Please check for missing data in your covariates or use a different outlier threshold.", n_complete))
+      }
+      
       # Store settings at time of analysis
       analysis_settings <- list(
         centering = input$centering,
@@ -663,8 +697,11 @@ server <- function(input, output, session) {
       )
       
       # Prepare process arguments
+      # Use complete cases only to avoid PROCESS errors
+      process_data <- reduced_data[complete_cases, ]
+      
       process_args <- list(
-        data = reduced_data,
+        data = process_data,
         y = input$outcome_var,
         x = input$predictor_var,
         w = input$moderator_var,
@@ -748,8 +785,8 @@ server <- function(input, output, session) {
       
       list(
         output = process_output, 
-        data_used = reduced_data,
-        original_data = rv$original_dataset,  # Add original dataset for bivariate correlations
+        data_used = process_data,  # Use processed data (complete cases after outlier removal)
+        original_data = rv$original_dataset,  # Keep original for bivariate correlations
         coefficients = coefficients,
         correlation_info = correlation_info,
         settings = analysis_settings  # Add settings to the output
