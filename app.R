@@ -276,7 +276,16 @@ server <- function(input, output, session) {
         "2" = "HC2",
         "3" = "HC3 (Davidson-MacKinnon)",
         "4" = "HC4 (Cribari-Neto)"
-      ))
+      )),
+      ""  # Add blank line before bivariate correlations
+    )
+    
+    # Add bivariate correlations section
+    bivariate_cor <- create_bivariate_correlations(
+      analysis_results$original_data,  # Use original dataset
+      settings$predictor_var,
+      settings$outcome_var,
+      settings  # Pass settings for dataset description
     )
     
     # Process the PROCESS output
@@ -403,10 +412,10 @@ server <- function(input, output, session) {
       }
     }
     
-    # Combine settings, correlation matrix, and processed output
+    # Combine settings, bivariate correlations, and processed output
     paste(
       "<div style='font-family: Courier, monospace; white-space: pre-wrap;'>",
-      paste(c(output_text, "", processed_output), collapse = "<br>"),  # Add blank line between sections
+      paste(c(output_text, "", bivariate_cor, "", processed_output), collapse = "<br>"),  # Add bivariate correlations
       "</div>"
     )
   }
@@ -598,7 +607,8 @@ server <- function(input, output, session) {
       
       list(
         output = process_output, 
-        data_used = rv$original_dataset, 
+        data_used = rv$original_dataset,
+        original_data = rv$original_dataset,  # Add original dataset for bivariate correlations
         coefficients = coefficients,
         correlation_info = correlation_info,
         settings = analysis_settings  # Add settings to the output
@@ -738,7 +748,8 @@ server <- function(input, output, session) {
       
       list(
         output = process_output, 
-        data_used = reduced_data, 
+        data_used = reduced_data,
+        original_data = rv$original_dataset,  # Add original dataset for bivariate correlations
         coefficients = coefficients,
         correlation_info = correlation_info,
         settings = analysis_settings  # Add settings to the output
@@ -1582,6 +1593,76 @@ server <- function(input, output, session) {
       }
     }
   )
+  
+  # Function to calculate bivariate correlations with guidance
+  create_bivariate_correlations <- function(data, predictor_var, outcome_var, settings) {
+    # Remove missing data for both variables
+    complete_data <- data[complete.cases(data[c(predictor_var, outcome_var)]), ]
+    n <- nrow(complete_data)
+    
+    # Calculate Pearson correlation
+    pearson_test <- cor.test(complete_data[[predictor_var]], complete_data[[outcome_var]], 
+                             method = "pearson")
+    pearson_r <- pearson_test$estimate
+    pearson_p <- pearson_test$p.value
+    pearson_ci <- pearson_test$conf.int
+    
+    # Calculate Spearman correlation
+    spearman_test <- cor.test(complete_data[[predictor_var]], complete_data[[outcome_var]], 
+                              method = "spearman")
+    spearman_rho <- spearman_test$estimate
+    spearman_p <- spearman_test$p.value
+    
+    # Determine dataset description
+    dataset_desc <- if(settings$outliers_removed) {
+      sprintf("the original dataset (before %d outlier%s removed)", 
+              settings$outliers_count, ifelse(settings$outliers_count == 1, "", "s"))
+    } else {
+      "the original dataset (all cases included)"
+    }
+    
+    # Create formatted output
+    output <- c(
+      "<br><strong>BIVARIATE CORRELATION: PREDICTOR AND OUTCOME</strong>",
+      sprintf("<em>This shows the zero-order (unadjusted) relationship between the predictor and outcome variables, calculated on %s:</em>", dataset_desc),
+      "",
+      sprintf("<strong>Pearson's r:</strong> %.4f, 95%% CI [%.4f, %.4f], p %s", 
+              pearson_r, pearson_ci[1], pearson_ci[2],
+              ifelse(pearson_p < .001, "< .001", sprintf("= %.3f", pearson_p))),
+      sprintf("<strong>Spearman's ρ:</strong> %.4f, p %s",
+              spearman_rho,
+              ifelse(spearman_p < .001, "< .001", sprintf("= %.3f", spearman_p))),
+      sprintf("<em>Sample size: %d cases (listwise deletion for these two variables)</em>", n),
+      "",
+      "<strong>Understanding These Correlations:</strong>",
+      "<ul>",
+      "<li><strong>Zero-order correlation:</strong> This is the simple bivariate relationship between predictor and outcome, without controlling for any other variables.</li>",
+      "<li><strong>Pearson's r:</strong> Measures linear relationships. Assumes normality and linearity. Use when variables are continuous and normally distributed.</li>",
+      "<li><strong>Spearman's ρ:</strong> Measures monotonic relationships (rank-based). More robust to outliers and non-normality. Use when variables are ordinal, have outliers, or show non-linear monotonic relationships.</li>",
+      "<li><strong>Important note about datasets:</strong> This bivariate correlation is calculated on the <strong>original dataset (all cases)</strong>, regardless of whether outliers were removed for the moderation analysis below. This provides a baseline comparison showing the unadjusted relationship in the complete data.</li>",
+      "<li><strong>Why moderation coefficients differ:</strong> The regression coefficients in the moderation analysis are <strong>partial effects</strong> that control for:",
+      "<ul>",
+      "<li>The moderator variable</li>",
+      "<li>The interaction term (predictor × moderator)</li>",
+      if(!is.null(settings$covariates)) sprintf("<li>Covariate(s): %s</li>", paste(settings$covariates, collapse = ", ")) else NULL,
+      "</ul>",
+      if(settings$outliers_removed) {
+        sprintf("Additionally, the moderation analysis below is based on data with %d outlier%s removed, which may also contribute to differences from the bivariate correlation above.", 
+                settings$outliers_count, ifelse(settings$outliers_count == 1, "", "s"))
+      } else {
+        "The moderation analysis uses the same dataset as this bivariate correlation."
+      },
+      "This means the predictor's coefficient represents the effect of the predictor <em>while holding the moderator (and interaction, and covariates) constant</em>, which is why it differs from the zero-order correlation above.</li>",
+      "</ul>",
+      "<em>Note: A significant zero-order correlation does not guarantee a significant partial effect in moderation, and vice versa. The moderation analysis provides more nuanced information about how the relationship changes across moderator levels.</em>",
+      ""
+    )
+    
+    # Remove NULL elements
+    output <- output[!sapply(output, is.null)]
+    
+    paste(output, collapse = "<br>")
+  }
   
   # Add this function in the server section
   create_correlation_matrix <- function(data, vars) {
