@@ -328,6 +328,9 @@ server <- function(input, output, session) {
         
         print(paste("DEBUG - calculated missing_cases:", missing_cases))
         
+        # Get missing data breakdown by variable
+        missing_breakdown <- create_missing_data_breakdown(analysis_results$original_data, settings)
+        
         processed_output <- c(processed_output,
           sprintf("Original dataset sample size: %d", settings$original_n),
           if(settings$outliers_removed) {
@@ -335,7 +338,12 @@ server <- function(input, output, session) {
                     settings$outliers_threshold, settings$outliers_count)
           },
           if(missing_cases > 0) {
-            sprintf("Missing data: %d cases with missing data (listwise) were excluded from moderation analysis", missing_cases)
+            c(
+              sprintf("Missing data: %d cases with missing data (listwise) were excluded from moderation analysis", missing_cases),
+              if(!is.null(missing_breakdown)) {
+                c("Missing data by variable:", missing_breakdown)
+              }
+            )
           },
           sprintf("Final sample size: %d", sample_size)
         )
@@ -1630,6 +1638,34 @@ server <- function(input, output, session) {
       }
     }
   )
+  
+  # Function to calculate missing data breakdown by variable
+  create_missing_data_breakdown <- function(data, settings) {
+    # Get all variables used in analysis
+    all_vars <- c(settings$outcome_var, settings$predictor_var, settings$moderator_var)
+    if(!is.null(settings$covariates) && length(settings$covariates) > 0) {
+      all_vars <- c(all_vars, settings$covariates)
+    }
+    
+    # Count missing values for each variable
+    missing_breakdown <- sapply(all_vars, function(var) {
+      sum(is.na(data[[var]]))
+    })
+    
+    # Only include variables with missing data
+    missing_breakdown <- missing_breakdown[missing_breakdown > 0]
+    
+    # Create formatted output
+    if(length(missing_breakdown) > 0) {
+      breakdown_lines <- sapply(names(missing_breakdown), function(var) {
+        count <- missing_breakdown[var]
+        sprintf("  %s: %d case%s missing", var, count, ifelse(count == 1, "", "s"))
+      })
+      paste(breakdown_lines, collapse = "<br>")
+    } else {
+      NULL
+    }
+  }
   
   # Function to calculate bivariate correlations with guidance
   create_bivariate_correlations <- function(data, predictor_var, outcome_var, settings) {

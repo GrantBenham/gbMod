@@ -19,6 +19,12 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
   - Homoscedasticity (Breusch-Pagan test)
   - Multicollinearity (VIF analysis)
   - Outlier detection using standardized residuals
+- **Missing Data Reporting**: Detailed breakdown of missing data by variable
+  - Shows which variables have missing values and how many cases are missing
+  - Helps identify data quality issues before analysis
+- **Data Validation**: Automatic validation of complete cases before analysis
+  - Prevents errors from insufficient data
+  - Clear error messages if analysis cannot proceed
 - **Interactive Plots**: Diagnostic plots with outlier highlighting
 - **Real-time Updates**: Assumption checks update automatically based on variable selection
 
@@ -78,6 +84,11 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 - Review results in the "Moderation Analysis" tab
 
 ### 6. Interpret Results
+- **Sample Size Information**: Review the sample size breakdown
+  - Original dataset size
+  - Number of outliers removed (if applicable)
+  - Missing data summary with detailed breakdown by variable
+  - Final sample size used in analysis
 - **Bivariate Correlations**: Review zero-order correlations (Pearson's r and Spearman's ρ) between predictor and outcome
   - Understand the difference between zero-order (bivariate) and partial (moderation) effects
   - Note that bivariate correlations use the original dataset, while moderation may use filtered data
@@ -105,6 +116,10 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 
 ## Best Practices
 - **Sample Size**: Ensure adequate sample size for moderation analysis (typically N > 100)
+- **Missing Data**: Review the missing data breakdown to identify data quality issues
+  - Check which variables have missing values and how many cases are affected
+  - Consider the impact of listwise deletion on your final sample size
+  - Ensure sufficient complete cases remain after accounting for missing data
 - **Variable Quality**: Use reliable and valid measures for all variables
 - **Assumption Checking**: Always review diagnostic plots and tests in the "Assumption Checks" tab
 - **Outlier Handling**: Document any cases removed and justify the decision based on both statistical and theoretical considerations
@@ -112,6 +127,8 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 - **Bootstrapping**: Use bootstrapping for more robust inference, especially with non-normal data (recommended: 5000+ samples)
 - **Heteroscedasticity**: If homoscedasticity is violated, consider using HC standard errors (HC3 recommended for small samples)
 - **Covariates**: Include relevant covariates to control for confounding variables
+  - Be aware that covariates with missing values will reduce your sample size through listwise deletion
+  - The app will validate that sufficient complete cases remain before running analysis
 - **Bivariate Correlations**: Review bivariate correlations to understand the unadjusted relationship before interpreting moderation effects
 
 ## Interpretation Guidelines
