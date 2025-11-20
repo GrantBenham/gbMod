@@ -604,7 +604,7 @@ server <- function(input, output, session) {
         settings = analysis_settings  # Add settings to the output
       )
     })
-  }, ignoreNULL = FALSE)  # Add this to ensure it responds to repeated clicks
+  }, ignoreNULL = TRUE)  # Only run when button is actually clicked
   
   # Analysis with outliers removed
   outliers_analysis <- eventReactive(input$run_analysis_no_outliers, {
@@ -744,7 +744,7 @@ server <- function(input, output, session) {
         settings = analysis_settings  # Add settings to the output
       )
     })
-  }, ignoreNULL = FALSE)  # Add this to ensure it responds to repeated clicks
+  }, ignoreNULL = TRUE)  # Only run when button is actually clicked
   
   # Combined results reactive
   analysis_results <- reactive({
