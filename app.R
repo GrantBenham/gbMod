@@ -304,14 +304,29 @@ server <- function(input, output, session) {
         next
       } else if(grepl("^Sample size:", line)) {
         sample_size <- as.numeric(gsub("Sample size: ", "", line))
+        
+        # Debug: Print values to console
+        print(paste("DEBUG - settings$original_n:", settings$original_n))
+        print(paste("DEBUG - sample_size:", sample_size))
+        print(paste("DEBUG - settings$outliers_removed:", settings$outliers_removed))
+        print(paste("DEBUG - settings$outliers_count:", settings$outliers_count))
+        
+        # Calculate missing data cases
+        missing_cases <- settings$original_n - sample_size
+        if(settings$outliers_removed) {
+          missing_cases <- missing_cases - settings$outliers_count
+        }
+        
+        print(paste("DEBUG - calculated missing_cases:", missing_cases))
+        
         processed_output <- c(processed_output,
-          "Original dataset sample size: 484",
-          if(!is.null(rv$outliers_info)) {
+          sprintf("Original dataset sample size: %d", settings$original_n),
+          if(settings$outliers_removed) {
             sprintf("Standardized residual outliers (|SR| > %.1f) removed: %d cases", 
-                    rv$outliers_info$threshold, rv$outliers_info$count)
+                    settings$outliers_threshold, settings$outliers_count)
           },
-          if(length(missing_data_note) > 0) {
-            "Missing data: 29 cases with missing data (listwise) were excluded from moderation analysis"
+          if(missing_cases > 0) {
+            sprintf("Missing data: %d cases with missing data (listwise) were excluded from moderation analysis", missing_cases)
           },
           sprintf("Final sample size: %d", sample_size)
         )
@@ -420,6 +435,7 @@ server <- function(input, output, session) {
     
     rv$original_dataset <- data
     rv$current_dataset <- data
+    print(paste("DEBUG - Dataset loaded with", nrow(data), "rows"))  # Add this line
     rv$analysis_results <- NULL  # Reset analysis results when new file is loaded
   })
   
@@ -507,7 +523,10 @@ server <- function(input, output, session) {
         moments = ifelse(input$conditioning_values == "0", 1, 0),
         jn = 1,
         modelbt = if(input$use_bootstrap) 1 else 0,
-        covcoeff = 1
+        covcoeff = 1,
+        cov = if(length(input$covariates) > 0) input$covariates else "xxxxx",
+        hc = if(input$hc_method == "none") 5 else as.numeric(input$hc_method),
+        boot = if(input$use_bootstrap) input$boot_samples else 5000
       )
       
       # Run PROCESS and capture output
@@ -520,28 +539,43 @@ server <- function(input, output, session) {
       coefficients <- NULL
       
       if (length(coef_start) > 0) {
-        coef_lines <- process_output[(coef_start + 3):(coef_start + 6)]
+        # Find where the coefficient section ends (blank line or next section)
+        coef_end <- coef_start + 2
+        for(i in (coef_start + 3):min(length(process_output), coef_start + 20)) {
+          if(i > length(process_output)) break
+          line <- trimws(process_output[i])
+          # Stop at blank line, "Product terms key:", or next section header
+          if(line == "" || grepl("^Product terms key:", line) || 
+             grepl("^Covariance matrix", line) || grepl("^Test\\(s\\)", line)) {
+            coef_end <- i - 1
+            break
+          }
+        }
+        
+        coef_lines <- process_output[(coef_start + 3):coef_end]
         print("Coefficient lines found in Model section:")
         print(coef_lines)
         
         coef_data <- numeric(4)
+        names(coef_data) <- c("constant", "predictor", "moderator", "interaction")
         
         for(i in seq_along(coef_lines)) {
           parts <- strsplit(trimws(coef_lines[i]), "\\s+")[[1]]
           if(length(parts) >= 2) {
-            if(grepl("constant|Intercept", parts[1], ignore.case = TRUE)) {
-              coef_data[1] <- as.numeric(parts[2])
-            } else if(grepl(input$predictor_var, parts[1])) {
-              coef_data[2] <- as.numeric(parts[2])
-            } else if(grepl(input$moderator_var, parts[1])) {
-              coef_data[3] <- as.numeric(parts[2])
-            } else if(grepl("Int_1", parts[1])) {
-              coef_data[4] <- as.numeric(parts[2])
+            var_name <- parts[1]
+            coef_value <- as.numeric(parts[2])
+            if(grepl("constant|Intercept", var_name, ignore.case = TRUE)) {
+              coef_data[1] <- coef_value
+            } else if(grepl(paste0("^", input$predictor_var, "$"), var_name)) {
+              coef_data[2] <- coef_value
+            } else if(grepl(paste0("^", input$moderator_var, "$"), var_name)) {
+              coef_data[3] <- coef_value
+            } else if(grepl("^Int_1", var_name)) {
+              coef_data[4] <- coef_value
             }
           }
         }
         
-        names(coef_data) <- c("constant", "predictor", "moderator", "interaction")
         print("Extracted coefficients with names:")
         print(coef_data)
         
@@ -629,7 +663,10 @@ server <- function(input, output, session) {
         moments = ifelse(input$conditioning_values == "0", 1, 0),
         jn = 1,
         modelbt = if(input$use_bootstrap) 1 else 0,
-        covcoeff = 1
+        covcoeff = 1,
+        cov = if(length(input$covariates) > 0) input$covariates else "xxxxx",
+        hc = if(input$hc_method == "none") 5 else as.numeric(input$hc_method),
+        boot = if(input$use_bootstrap) input$boot_samples else 5000
       )
       
       # Run PROCESS and capture output
@@ -642,28 +679,43 @@ server <- function(input, output, session) {
       coefficients <- NULL
       
       if (length(coef_start) > 0) {
-        coef_lines <- process_output[(coef_start + 3):(coef_start + 6)]
+        # Find where the coefficient section ends (blank line or next section)
+        coef_end <- coef_start + 2
+        for(i in (coef_start + 3):min(length(process_output), coef_start + 20)) {
+          if(i > length(process_output)) break
+          line <- trimws(process_output[i])
+          # Stop at blank line, "Product terms key:", or next section header
+          if(line == "" || grepl("^Product terms key:", line) || 
+             grepl("^Covariance matrix", line) || grepl("^Test\\(s\\)", line)) {
+            coef_end <- i - 1
+            break
+          }
+        }
+        
+        coef_lines <- process_output[(coef_start + 3):coef_end]
         print("Coefficient lines found in Model section:")
         print(coef_lines)
         
         coef_data <- numeric(4)
+        names(coef_data) <- c("constant", "predictor", "moderator", "interaction")
         
         for(i in seq_along(coef_lines)) {
           parts <- strsplit(trimws(coef_lines[i]), "\\s+")[[1]]
           if(length(parts) >= 2) {
-            if(grepl("constant|Intercept", parts[1], ignore.case = TRUE)) {
-              coef_data[1] <- as.numeric(parts[2])
-            } else if(grepl(input$predictor_var, parts[1])) {
-              coef_data[2] <- as.numeric(parts[2])
-            } else if(grepl(input$moderator_var, parts[1])) {
-              coef_data[3] <- as.numeric(parts[2])
-            } else if(grepl("Int_1", parts[1])) {
-              coef_data[4] <- as.numeric(parts[2])
+            var_name <- parts[1]
+            coef_value <- as.numeric(parts[2])
+            if(grepl("constant|Intercept", var_name, ignore.case = TRUE)) {
+              coef_data[1] <- coef_value
+            } else if(grepl(paste0("^", input$predictor_var, "$"), var_name)) {
+              coef_data[2] <- coef_value
+            } else if(grepl(paste0("^", input$moderator_var, "$"), var_name)) {
+              coef_data[3] <- coef_value
+            } else if(grepl("^Int_1", var_name)) {
+              coef_data[4] <- coef_value
             }
           }
         }
         
-        names(coef_data) <- c("constant", "predictor", "moderator", "interaction")
         print("Extracted coefficients with names:")
         print(coef_data)
         
