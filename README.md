@@ -10,7 +10,8 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 - **Moderation Analysis**: Implements Hayes' PROCESS Model 1 for testing interaction effects
 - **Variable Selection**: Support for outcome, predictor, moderator, and optional covariate variables
 - **Data Formats**: Accepts both CSV and SPSS (.sav) file formats
-- **Bootstrapping**: Optional bootstrap confidence intervals for enhanced statistical inference
+- **Bootstrapping**: Optional bootstrap confidence intervals with customizable sample size (default: 5000)
+- **Bivariate Correlations**: Zero-order correlations (Pearson's r and Spearman's ρ) between predictor and outcome, with guidance on interpreting differences from moderation coefficients
 
 ### Diagnostic Capabilities
 - **Assumption Checks**: Comprehensive evaluation of regression assumptions
@@ -33,8 +34,10 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 ### Analysis Settings
 - **Centering Options**: No centering, mean centering, or standardization
 - **Conditioning Values**: Mean ±1 SD or 16th/50th/84th percentiles
-- **Heteroscedasticity-Consistent Standard Errors**: Multiple HC estimators (HC0-HC4)
+- **Heteroscedasticity-Consistent Standard Errors**: Multiple HC estimators (HC0-HC4) with proper implementation
+- **Bootstrap Configuration**: Customizable number of bootstrap samples (1000-10000)
 - **Outlier Handling**: Option to run analysis with or without standardized residual outliers
+- **Covariate Support**: Full support for multiple covariates with proper integration into PROCESS analysis
 
 ### Export Capabilities
 - **Results Download**: HTML-formatted analysis results
@@ -68,15 +71,20 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 - Consider the impact of outliers on your analysis
 
 ### 5. Run Analysis
+- Navigate to the "Moderation Analysis" tab
 - Choose "With Original Dataset" to include all cases
 - Choose "With Outliers Removed" to exclude cases above the residual threshold
+- **Note**: Analysis runs only when you click one of these buttons (not automatically)
 - Review results in the "Moderation Analysis" tab
 
 ### 6. Interpret Results
-- Examine the interaction test for statistical significance
-- Review conditional effects at different moderator levels
-- Use Johnson-Neyman plot to identify regions of significance
-- Interpret simple slopes plot for practical significance
+- **Bivariate Correlations**: Review zero-order correlations (Pearson's r and Spearman's ρ) between predictor and outcome
+  - Understand the difference between zero-order (bivariate) and partial (moderation) effects
+  - Note that bivariate correlations use the original dataset, while moderation may use filtered data
+- **Interaction Test**: Examine the interaction test for statistical significance
+- **Conditional Effects**: Review conditional effects at different moderator levels
+- **Johnson-Neyman Plot**: Use to identify regions of significance for the moderator
+- **Simple Slopes Plot**: Interpret for practical significance and visualization of interaction effects
 
 ### 7. Export Results
 - Download formatted results for reporting
@@ -98,17 +106,26 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 ## Best Practices
 - **Sample Size**: Ensure adequate sample size for moderation analysis (typically N > 100)
 - **Variable Quality**: Use reliable and valid measures for all variables
-- **Assumption Checking**: Always review diagnostic plots and tests
-- **Outlier Handling**: Document any cases removed and justify the decision
+- **Assumption Checking**: Always review diagnostic plots and tests in the "Assumption Checks" tab
+- **Outlier Handling**: Document any cases removed and justify the decision based on both statistical and theoretical considerations
 - **Effect Size**: Consider practical significance in addition to statistical significance
-- **Bootstrapping**: Use bootstrapping for more robust inference, especially with non-normal data
+- **Bootstrapping**: Use bootstrapping for more robust inference, especially with non-normal data (recommended: 5000+ samples)
+- **Heteroscedasticity**: If homoscedasticity is violated, consider using HC standard errors (HC3 recommended for small samples)
+- **Covariates**: Include relevant covariates to control for confounding variables
+- **Bivariate Correlations**: Review bivariate correlations to understand the unadjusted relationship before interpreting moderation effects
 
 ## Interpretation Guidelines
+- **Bivariate vs. Partial Effects**: 
+  - Bivariate correlations show the zero-order relationship without controlling for other variables
+  - Moderation coefficients are partial effects that control for moderator, interaction, and covariates
+  - These will differ; the moderation analysis provides more nuanced information
+  - Use Pearson's r for linear relationships with normal data; Spearman's ρ for rank-based or non-normal data
 - **Interaction Effect**: Focus on the R² change and p-value for the interaction term
 - **Conditional Effects**: Examine how the predictor's effect varies across moderator levels
 - **Johnson-Neyman**: Use to identify specific moderator values where effects become significant
 - **Simple Slopes**: Visualize the nature and direction of interaction effects
 - **Effect Sizes**: Consider both statistical and practical significance of findings
+- **Covariates**: When covariates are included, their effects are controlled in the moderation analysis
 
 ## Support
 For questions or issues with the application, please refer to the diagnostic information provided within the app or consult Hayes' PROCESS documentation for theoretical guidance on moderation analysis.
