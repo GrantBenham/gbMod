@@ -28,8 +28,32 @@ ui <- fluidPage(
       h4("Select Variables"),
       uiOutput("variable_selectors"),
       
-      numericInput("residual_threshold", "Standardized Residual Threshold", 
-                  value = 2, min = 1, max = 10, step = 0.1),
+      # Conditional threshold input based on outcome type
+      conditionalPanel(
+        condition = "output.outcome_is_continuous === true",
+        h5("Outlier Detection (Continuous Outcomes)"),
+        numericInput("residual_threshold", "Standardized Residual Threshold", 
+                    value = 2, min = 1, max = 10, step = 0.1),
+        p(em("Cases with |standardized residual| > threshold will be identified as outliers"))
+      ),
+      conditionalPanel(
+        condition = "output.outcome_is_continuous === false",
+        h5("Influential Case Detection (Binary Outcomes)"),
+        radioButtons("cooks_threshold_type", "Cook's Distance Threshold:",
+          choices = list(
+            "Conservative (4/n)" = "conservative",
+            "Liberal (1.0)" = "liberal",
+            "Custom" = "custom"
+          ),
+          selected = "conservative"
+        ),
+        conditionalPanel(
+          condition = "input.cooks_threshold_type == 'custom'",
+          numericInput("cooks_threshold_custom", "Custom Cook's Distance Threshold", 
+                      value = 0.01, min = 0, max = 1, step = 0.001)
+        ),
+        p(em("Cases with Cook's distance > threshold will be identified as influential"))
+      ),
       
       # Wrap all PROCESS settings in a conditional panel
       conditionalPanel(
@@ -98,10 +122,7 @@ ui <- fluidPage(
           )
         ),
         div(style = "margin-bottom: 20px; width: 100%;",
-          actionButton("run_analysis_no_outliers", "With Outliers Removed", 
-            class = "btn-warning",
-            style = "width: 100%;"
-          )
+          uiOutput("outlier_removal_button")
         ),
         
         h4("Download Options"),
@@ -265,8 +286,13 @@ server <- function(input, output, session) {
       
       # Outlier information
       if(settings$outliers_removed) {
-        sprintf("%d standardized residual outliers (|SR| > %.1f) removed", 
-                settings$outliers_count, settings$outliers_threshold)
+        if(settings$outliers_method == "Cook's Distance") {
+          sprintf("%d influential cases (Cook's D > %.4f) removed", 
+                  settings$outliers_count, settings$outliers_threshold)
+        } else {
+          sprintf("%d standardized residual outliers (|SR| > %.1f) removed", 
+                  settings$outliers_count, settings$outliers_threshold)
+        }
       } else {
         "Original dataset with all cases"
       },
@@ -363,8 +389,13 @@ server <- function(input, output, session) {
         processed_output <- c(processed_output,
           sprintf("Original dataset sample size: %d", settings$original_n),
           if(settings$outliers_removed) {
-            sprintf("Standardized residual outliers (|SR| > %.1f) removed: %d cases", 
-                    settings$outliers_threshold, settings$outliers_count)
+            if(settings$outliers_method == "Cook's Distance") {
+              sprintf("Influential cases (Cook's D > %.4f) removed: %d cases", 
+                      settings$outliers_threshold, settings$outliers_count)
+            } else {
+              sprintf("Standardized residual outliers (|SR| > %.1f) removed: %d cases", 
+                      settings$outliers_threshold, settings$outliers_count)
+            }
           },
           if(missing_cases > 0) {
             c(
@@ -556,6 +587,26 @@ server <- function(input, output, session) {
     rv$analysis_results <- NULL  # Reset analysis results when new file is loaded
   })
   
+  # Reactive to compute Cook's distance threshold
+  cooks_threshold_value <- reactive({
+    req(rv$original_dataset, input$outcome_var)
+    outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
+    
+    if(!outcome_is_binary) {
+      return(NULL)
+    }
+    
+    n <- nrow(rv$original_dataset)
+    
+    if(input$cooks_threshold_type == "conservative") {
+      return(4 / n)
+    } else if(input$cooks_threshold_type == "liberal") {
+      return(1.0)
+    } else {
+      return(input$cooks_threshold_custom)
+    }
+  })
+  
   # Function to identify outliers
   identify_outliers <- reactive({
     req(rv$original_dataset, input$outcome_var, input$predictor_var, input$moderator_var)
@@ -571,14 +622,28 @@ server <- function(input, output, session) {
     outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
     
     if(outcome_is_binary) {
-      # For binary outcomes, outlier removal is not standard practice
-      # Return empty list to disable outlier removal
+      # For binary outcomes, use logistic regression diagnostics
+      model <- glm(model_formula, data = rv$original_dataset, family = binomial())
+      
+      # Calculate leverage (hat values) and Cook's distance
+      leverage <- hatvalues(model)
+      cooks_d <- cooks.distance(model)
+      
+      # Get threshold
+      threshold <- cooks_threshold_value()
+      
+      # Identify influential cases based on Cook's distance
+      influential_cases <- which(cooks_d > threshold)
+      
       return(list(
-        cases = integer(0),
-        values = numeric(0),
-        count = 0,
-        percentage = 0,
-        is_binary = TRUE
+        cases = influential_cases,
+        values = cooks_d[influential_cases],
+        leverage = leverage[influential_cases],
+        count = length(influential_cases),
+        percentage = length(influential_cases) / length(cooks_d) * 100,
+        is_binary = TRUE,
+        threshold = threshold,
+        method = "Cook's Distance"
       ))
     } else {
       # For continuous outcomes, use linear regression
@@ -594,7 +659,9 @@ server <- function(input, output, session) {
         values = outlier_values,
         count = length(outlier_cases),
         percentage = length(outlier_cases) / length(std_resid) * 100,
-        is_binary = FALSE
+        is_binary = FALSE,
+        threshold = input$residual_threshold,
+        method = "Standardized Residuals"
       ))
     }
   })
@@ -638,7 +705,16 @@ server <- function(input, output, session) {
         original_n = nrow(rv$original_dataset),
         outliers_removed = FALSE,
         outliers_count = 0,
-        outliers_threshold = input$residual_threshold,
+        outliers_threshold = if(is_binary_variable(rv$original_dataset, input$outcome_var)) {
+          cooks_threshold_value()
+        } else {
+          input$residual_threshold
+        },
+        outliers_method = if(is_binary_variable(rv$original_dataset, input$outcome_var)) {
+          "Cook's Distance"
+        } else {
+          "Standardized Residuals"
+        },
         predictor_var = input$predictor_var,
         outcome_var = input$outcome_var,
         moderator_var = input$moderator_var,
@@ -813,7 +889,8 @@ server <- function(input, output, session) {
         original_n = nrow(rv$original_dataset),
         outliers_removed = TRUE,
         outliers_count = outliers$count,
-        outliers_threshold = input$residual_threshold,
+        outliers_threshold = outliers$threshold,
+        outliers_method = outliers$method,
         predictor_var = input$predictor_var,
         outcome_var = input$outcome_var,
         moderator_var = input$moderator_var,
@@ -1557,27 +1634,40 @@ server <- function(input, output, session) {
       outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
       
       if(outcome_is_binary) {
-        # For binary outcomes, use logistic regression
+        # For binary outcomes, use logistic regression with Cook's distance highlighting
         model <- glm(model_formula, data = rv$original_dataset, family = binomial())
-        fitted_values <- fitted(model)  # These are probabilities
+        fitted_values <- fitted(model)  # Probabilities
         pearson_resid <- residuals(model, type = "pearson")
-        # Note: For binary outcomes, we don't highlight "outliers" in the same way
-        # as they have different interpretation
+        
+        # Get influential cases via identify_outliers (Cook's distance)
+        outliers <- identify_outliers()
+        is_outlier <- seq_along(fitted_values) %in% outliers$cases
+        
+        subtitle_text <- if(outliers$count > 0) {
+          sprintf("Cook's D > %.4f: %d influential case%s highlighted",
+                  outliers$threshold, outliers$count,
+                  ifelse(outliers$count == 1, "", "s"))
+        } else {
+          sprintf("Cook's D ≤ %.4f: No influential cases detected", outliers$threshold)
+        }
         
         plot_data <- data.frame(
           fitted = fitted_values,
-          residuals = pearson_resid
+          residuals = pearson_resid,
+          is_outlier = is_outlier
         )
         
         ggplot(plot_data, aes(x = fitted, y = residuals)) +
-          geom_point(alpha = 0.6, color = "black") +
+          geom_point(aes(color = is_outlier), alpha = 0.6) +
+          scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
           geom_smooth(method = "loess", se = FALSE, color = "blue") +
           geom_hline(yintercept = 0, linetype = "dashed") +
           theme_minimal() +
           labs(title = "Residuals vs Fitted (Logistic Regression)",
                x = "Fitted probabilities",
                y = "Pearson residuals",
-               subtitle = "Note: For binary outcomes, residuals show different patterns than linear regression") +
+               subtitle = subtitle_text,
+               color = "Influential (Cook's D)") +
           theme(
             text = element_text(size = 14),
             axis.title = element_text(size = 16),
@@ -1711,22 +1801,80 @@ server <- function(input, output, session) {
         outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
         
         if(outcome_is_binary) {
-          # For binary outcomes, standardized residuals from linear regression are inappropriate
-          return(c(
-            "<strong>Standardized Residual Analysis:</strong>",
-            "<em>Note: Your outcome variable is binary (0/1).</em>",
-            "<br>",
-            "<strong>Important:</strong> Standardized residuals from linear regression are not appropriate for binary outcomes.",
-            "For binary outcomes:",
-            "<ul>",
-            "<li>PROCESS uses logistic regression, which has different assumptions</li>",
-            "<li>Residuals in logistic regression are not normally distributed</li>",
-            "<li>Outlier removal based on residuals is not standard practice for binary outcomes</li>",
-            "<li>Large residuals may indicate model misspecification rather than outliers</li>",
-            "</ul>",
-            "<strong>Recommendation:</strong> Do not remove cases based on residuals for binary outcomes.",
-            "If you have concerns about specific cases, examine them individually for data entry errors or other issues."
-          ))
+          # For binary outcomes, use logistic regression diagnostics
+          model <- glm(model_formula, data = rv$original_dataset, family = binomial())
+          
+          leverage <- hatvalues(model)
+          cooks_d <- cooks.distance(model)
+          
+          # Get threshold
+          n <- nrow(rv$original_dataset)
+          threshold <- if(input$cooks_threshold_type == "conservative") {
+            4 / n
+          } else if(input$cooks_threshold_type == "liberal") {
+            1.0
+          } else {
+            input$cooks_threshold_custom
+          }
+          
+          # Identify influential cases
+          influential_cases <- which(cooks_d > threshold)
+          
+          if(length(influential_cases) > 0) {
+            # Sort by Cook's distance
+            sorted_indices <- order(-cooks_d[influential_cases])
+            sorted_cases <- influential_cases[sorted_indices]
+            sorted_cooks <- cooks_d[sorted_cases]
+            sorted_leverage <- leverage[sorted_cases]
+            
+            case_summaries <- sapply(seq_along(sorted_cases), function(i) {
+              sprintf("Case %d: Cook's D = %.4f, Leverage = %.4f", 
+                      sorted_cases[i], sorted_cooks[i], sorted_leverage[i])
+            })
+            
+            threshold_label <- if(input$cooks_threshold_type == "conservative") {
+              sprintf("4/n = %.4f", threshold)
+            } else if(input$cooks_threshold_type == "liberal") {
+              "1.0"
+            } else {
+              sprintf("%.4f", threshold)
+            }
+            
+            return(c(
+              "<strong>Influential Case Analysis (Logistic Regression):</strong>",
+              "<em>Note: Your outcome variable is binary (0/1). Using leverage and Cook's distance.</em>",
+              "<br>",
+              sprintf("Cases exceeding threshold (Cook's D > %s):", threshold_label),
+              sprintf("Number of cases: %d (%.1f%%)", 
+                      length(influential_cases),
+                      100 * length(influential_cases) / length(cooks_d)),
+              "<br>",
+              "<strong>Understanding these metrics:</strong>",
+              "<ul>",
+              "<li><strong>Cook's Distance:</strong> Measures the influence of each case on all parameter estimates. Values > 4/n (conservative) or > 1.0 (liberal) suggest influential cases.</li>",
+              "<li><strong>Leverage:</strong> Measures how unusual a case's predictor values are. High leverage cases can have disproportionate influence on the model.</li>",
+              "</ul>",
+              "<strong>Top cases (sorted by Cook's D):</strong>",
+              paste0('<div style="max-height: 100px; overflow-y: auto; border: 1px solid #ddd; padding: 5px; margin: 5px 0;">', 
+                    paste(case_summaries, collapse = "<br>"),
+                    '</div>')
+            ))
+          } else {
+            threshold_label <- if(input$cooks_threshold_type == "conservative") {
+              sprintf("4/n = %.4f", threshold)
+            } else if(input$cooks_threshold_type == "liberal") {
+              "1.0"
+            } else {
+              sprintf("%.4f", threshold)
+            }
+            
+            return(c(
+              "<strong>Influential Case Analysis (Logistic Regression):</strong>",
+              "<em>Note: Your outcome variable is binary (0/1). Using leverage and Cook's distance.</em>",
+              "<br>",
+              sprintf("No cases exceed the threshold (Cook's D > %s)", threshold_label)
+            ))
+          }
         }
         
         # For continuous outcomes, use linear regression
@@ -1810,7 +1958,7 @@ server <- function(input, output, session) {
           "For binary outcomes, different diagnostic approaches are needed:<br>",
           "<ul>",
           "<li><strong>Linearity:</strong> Check linearity of continuous predictors with the logit of the outcome</li>",
-          "<li><strong>Influential observations:</strong> Review leverage values and Cook's distance (not shown here)</li>",
+            "<li><strong>Influential observations:</strong> Review leverage values and Cook's distance in the outlier summary above</li>",
           "<li><strong>Model fit:</strong> Use pseudo-R² measures (McFadden, Cox-Snell, Nagelkerke) shown in PROCESS output</li>",
           "<li><strong>Multicollinearity:</strong> VIF can still be calculated for predictors</li>",
           "</ul><br>",
@@ -1928,6 +2076,23 @@ server <- function(input, output, session) {
                    value = input$moderator_var)
   })
   
+  # UI output for outlier removal button with dynamic text
+  output$outlier_removal_button <- renderUI({
+    req(rv$original_dataset, input$outcome_var)
+    
+    outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
+    
+    button_text <- if(outcome_is_binary) {
+      "With Cook's Distance Outliers Removed"
+    } else {
+      "With Standardized Residual Outliers Removed"
+    }
+    
+    actionButton("run_analysis_no_outliers", button_text, 
+                class = "btn-warning",
+                style = "width: 100%;")
+  })
+  
   # Add these observers to handle button states
   observe({
     if (is.null(rv$original_dataset) || 
@@ -1938,12 +2103,12 @@ server <- function(input, output, session) {
       shinyjs::disable("run_analysis_no_outliers")
     } else {
       shinyjs::enable("run_analysis")
-      # Disable outlier removal for binary outcomes
-      outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
-      if(outcome_is_binary) {
-        shinyjs::disable("run_analysis_no_outliers")
-      } else {
+      # Check if there are any outliers/influential cases
+      outliers <- identify_outliers()
+      if(outliers$count > 0) {
         shinyjs::enable("run_analysis_no_outliers")
+      } else {
+        shinyjs::disable("run_analysis_no_outliers")
       }
     }
   })
@@ -1957,22 +2122,17 @@ server <- function(input, output, session) {
     },
     content = function(file) {
       req(rv$original_dataset, input$outcome_var, input$predictor_var, 
-          input$moderator_var, input$residual_threshold)
+          input$moderator_var)
       
-      # Create model formula
-      formula_terms <- c(input$outcome_var, "~", input$predictor_var, "*", input$moderator_var)
-      if (length(input$covariates) > 0) {
-        formula_terms <- c(formula_terms, "+", paste(input$covariates, collapse = " + "))
+      # Use identify_outliers to get the cases to remove
+      outliers <- identify_outliers()
+      
+      if(outliers$count == 0) {
+        stop("No outliers/influential cases found to remove")
       }
-      model_formula <- as.formula(paste(formula_terms, collapse = " "))
-      
-      # Fit model and identify outliers
-      model <- lm(model_formula, data = rv$original_dataset)
-      std_resid <- rstandard(model)
-      outlier_cases <- which(abs(std_resid) > input$residual_threshold)
       
       # Create filtered dataset
-      filtered_data <- rv$original_dataset[-outlier_cases, ]
+      filtered_data <- rv$original_dataset[-outliers$cases, ]
       
       # Save in selected format
       if (input$filtered_data_format == "sav") {
@@ -2102,8 +2262,13 @@ server <- function(input, output, session) {
         if(!is.null(settings$covariates)) sprintf("<li>Covariate(s): %s</li>", paste(settings$covariates, collapse = ", ")) else NULL,
         "</ul>",
         if(settings$outliers_removed) {
-          sprintf("Additionally, the moderation analysis below is based on data with %d outlier%s removed, which may also contribute to differences from the bivariate correlation above.", 
-                  settings$outliers_count, ifelse(settings$outliers_count == 1, "", "s"))
+          if(settings$outliers_method == "Cook's Distance") {
+            sprintf("Additionally, the moderation analysis below is based on data with %d influential case%s removed, which may also contribute to differences from the bivariate correlation above.", 
+                    settings$outliers_count, ifelse(settings$outliers_count == 1, "", "s"))
+          } else {
+            sprintf("Additionally, the moderation analysis below is based on data with %d outlier%s removed, which may also contribute to differences from the bivariate correlation above.", 
+                    settings$outliers_count, ifelse(settings$outliers_count == 1, "", "s"))
+          }
         } else {
           "The moderation analysis uses the same dataset as this bivariate correlation."
         },
