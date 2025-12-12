@@ -668,15 +668,17 @@ server <- function(input, output, session) {
   
   # Violin plot for continuous variables (original vs analysis dataset)
   output$violin_plot <- renderPlot({
+    req(rv$original_dataset, input$outcome_var, input$predictor_var, input$moderator_var)
+    
+    # Determine height dynamically based on number of continuous vars
+    selected_vars <- c(input$outcome_var, input$predictor_var, input$moderator_var)
+    cont_vars <- selected_vars[vapply(selected_vars, function(v) is_continuous_variable(rv$original_dataset, v), logical(1))]
+    plot_height <- max(350, 250 * max(1, length(cont_vars)))
+    session$sendCustomMessage(type = "resize-violin", message = list(height = plot_height))
+    
     tryCatch({
-      req(rv$original_dataset, input$outcome_var, input$predictor_var, input$moderator_var)
-      
       # Determine which selected vars are continuous (numeric and not binary)
-      selected_vars <- c(input$outcome_var, input$predictor_var, input$moderator_var)
-      cont_vars <- selected_vars[vapply(selected_vars, function(v) {
-        is_continuous_variable(rv$original_dataset, v)
-      }, logical(1))]
-      
+      # (cont_vars already computed above)
       # Debugging info
       message("DEBUG - Violin plot:")
       message("Selected vars: ", paste(selected_vars, collapse = ", "))
@@ -700,24 +702,28 @@ server <- function(input, output, session) {
       
       message("DEBUG - orig_long rows: ", nrow(orig_long))
       
-      # Optionally add analysis dataset (after removals) if available
+      # Build analysis dataset by removing identified outliers/influential cases
       analysis_long <- NULL
-      ar <- tryCatch(analysis_results(), error = function(e) {
-        message("DEBUG - analysis_results error in violin plot: ", e$message)
+      outliers <- tryCatch(identify_outliers(), error = function(e) {
+        message("DEBUG - identify_outliers error in violin plot: ", e$message)
         NULL
       })
-      if(!is.null(ar)) {
-        used_data <- ar$data_used
-        message("DEBUG - Analysis dataset rows: ", nrow(used_data))
-        analysis_long <- do.call(rbind, lapply(cont_vars, function(v) {
-          data.frame(
-            variable = v,
-            value = used_data[[v]],
-            dataset = if(ar$settings$outliers_removed) "Analysis (after removals)" else "Analysis",
-            stringsAsFactors = FALSE
-          )
-        }))
+      filtered_data <- rv$original_dataset
+      if(!is.null(outliers) && length(outliers$cases) > 0) {
+        filtered_data <- rv$original_dataset[-outliers$cases, ]
+        message("DEBUG - Filtered dataset rows (after removal): ", nrow(filtered_data))
+      } else {
+        message("DEBUG - No influential/outlier cases removed; filtered dataset = original")
       }
+      analysis_long <- do.call(rbind, lapply(cont_vars, function(v) {
+        data.frame(
+          variable = v,
+          value = filtered_data[[v]],
+          dataset = "After removal",
+          stringsAsFactors = FALSE
+        )
+      }))
+      message("DEBUG - analysis_long rows: ", nrow(analysis_long))
       
       plot_data <- orig_long
       if(!is.null(analysis_long)) {
@@ -732,7 +738,8 @@ server <- function(input, output, session) {
       
       # Ensure variable is factor and dataset is factor for plotting
       plot_data$variable <- factor(plot_data$variable, levels = cont_vars)
-      plot_data$dataset <- factor(plot_data$dataset)
+      dataset_levels <- c("Original", "After removal")
+      plot_data$dataset <- factor(plot_data$dataset, levels = dataset_levels)
       
       message("DEBUG - Plot data rows: ", nrow(plot_data))
       message("DEBUG - Datasets in plot data: ", paste(unique(plot_data$dataset), collapse = ", "))
@@ -751,11 +758,12 @@ server <- function(input, output, session) {
       
       # Build plot with error trapping
       p <- tryCatch({
-        ggplot(plot_data, aes(x = variable, y = value, fill = dataset)) +
+        ggplot(plot_data, aes(x = dataset, y = value, fill = dataset)) +
           geom_violin(trim = FALSE, alpha = 0.5, color = NA) +
-          geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.6) +
+          geom_boxplot(width = 0.12, outlier.shape = NA, alpha = 0.6) +
+          facet_wrap(~ variable, scales = "free_y", ncol = 1) +
           labs(title = "Continuous Variable Distributions",
-               x = "Variable",
+               x = "Dataset (Original vs After removal)",
                y = "Value",
                fill = "Dataset") +
           theme_minimal() +
@@ -764,7 +772,8 @@ server <- function(input, output, session) {
             axis.title = element_text(size = 16),
             axis.text = element_text(size = 14),
             plot.title = element_text(size = 18, hjust = 0.5),
-            legend.position = "right"
+            legend.position = "right",
+            strip.text = element_text(size = 14)
           )
       }, error = function(e) {
         message("DEBUG - ggplot error: ", conditionMessage(e))
