@@ -2,7 +2,7 @@
 Moderation Analysis using Hayes' PROCESS - R Shiny Application
 
 ## Overview
-gbMod is a comprehensive Shiny application designed to conduct moderation analysis using Hayes' PROCESS methodology. The application provides an intuitive interface for testing interaction effects between variables, with robust diagnostic capabilities and detailed visualization options. The app automatically handles both continuous and binary outcomes, using linear regression for continuous outcomes and logistic regression for binary outcomes.
+gbMod is a comprehensive Shiny application designed to conduct moderation analysis using Hayes' PROCESS methodology. The application provides an intuitive interface for testing interaction effects between variables, with robust diagnostic capabilities and detailed visualization options. The app automatically handles both continuous and binary outcomes, using linear regression for continuous outcomes and logistic regression for binary outcomes, and adapts diagnostics, plots, and outlier/influential-case handling accordingly.
 
 ## Features
 
@@ -26,13 +26,15 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
     - Normality of residuals (Shapiro-Wilk test and Q-Q plots)
     - Homoscedasticity (Breusch-Pagan test and scale-location plots)
     - Multicollinearity (VIF analysis)
-    - Outlier detection using standardized residuals
+    - Outlier detection using standardized residuals (user-specified threshold)
+    - Continuous-variable violin plots show side-by-side distributions for original vs after-removal datasets (one row per variable, free y-scales)
+    - Binary-variable counts shown for original and after-removal datasets
   - **For Binary Outcomes**:
     - Appropriate diagnostics for logistic regression
-    - Pearson residuals vs. fitted probabilities plot
+    - Pearson residuals vs. fitted probabilities plot with Cook’s D highlighting
     - VIF analysis for multicollinearity
     - Note: Normality and homoscedasticity assumptions do not apply to logistic regression
-    - Outlier removal based on standardized residuals is disabled (not standard practice for binary outcomes)
+    - Influential-case detection using Cook’s distance (configurable threshold), with counts shown when applicable
 - **Missing Data Reporting**: Detailed breakdown of missing data by variable
   - Shows which variables have missing values and how many cases are missing
   - Helps identify data quality issues before analysis
@@ -64,9 +66,9 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 - **Heteroscedasticity-Consistent Standard Errors**: Multiple HC estimators (HC0-HC4) for continuous outcomes
   - **Note**: HC estimators apply to linear regression only; not applicable to logistic regression
 - **Bootstrap Configuration**: Customizable number of bootstrap samples (1000-10000)
-- **Outlier Handling**: 
-  - For continuous outcomes: Option to run analysis with or without standardized residual outliers
-  - For binary outcomes: Outlier removal button is disabled (not standard practice for logistic regression)
+- **Outlier / Influential-Case Handling**: 
+  - For continuous outcomes: Option to run analysis with or without standardized residual outliers; violin plots and binary counts reflect removals
+  - For binary outcomes: Outlier removal button is disabled; influential cases identified via Cook’s distance (threshold selectable: 4/n, 1.0, or custom) and shown in diagnostics and counts
 - **Covariate Support**: Full support for multiple covariates with proper integration into PROCESS analysis
 
 ### Export Capabilities
@@ -101,14 +103,15 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 ### 4. Review Assumptions
 - Check the "Assumption Checks" tab for diagnostic information
   - **For Continuous Outcomes**:
-    - Review standardized residual outliers
+    - Review standardized residual outliers (threshold-driven)
     - Examine diagnostic plots for normality and homoscedasticity
-    - Consider the impact of outliers on your analysis
+    - Continuous-variable violin plots show original vs after-removal distributions (one row per variable; free y-scales)
+    - Binary-variable counts shown for original and after-removal datasets
   - **For Binary Outcomes**:
-    - Review Pearson residuals vs. fitted probabilities plot
+    - Review Pearson residuals vs. fitted probabilities plot (with Cook’s D highlighting)
     - Check VIF values for multicollinearity
+    - Influential cases detected via Cook’s distance (configurable threshold); counts shown when applicable
     - Note that normality and homoscedasticity assumptions do not apply
-    - Outlier removal is not available (not standard practice for binary outcomes)
 - The app automatically adapts the diagnostic information based on your outcome variable type
 
 ### 5. Run Analysis
@@ -123,14 +126,14 @@ gbMod is a comprehensive Shiny application designed to conduct moderation analys
 ### 6. Interpret Results
 - **Sample Size Information**: Review the sample size breakdown
   - Original dataset size
-  - Number of outliers removed (if applicable, continuous outcomes only)
+  - Number of outliers/influential cases removed (if applicable)
   - Missing data summary with detailed breakdown by variable
   - Final sample size used in analysis
 - **Bivariate Correlations**: Review zero-order correlations between predictor and outcome
   - For continuous outcomes: Pearson's r and Spearman's ρ
   - For binary outcomes: Point-biserial correlation (Pearson's r) with appropriate interpretation
   - Understand the difference between zero-order (bivariate) and partial (moderation) effects
-  - Note that bivariate correlations use the original dataset, while moderation may use filtered data
+  - Note that bivariate correlations use the original dataset; moderation may use filtered data when removals occur
 - **Model Fit Statistics**: 
   - For continuous outcomes: R² and F-test
   - For binary outcomes: -2LL, pseudo-R² measures (McFadden, Cox-Snell, Nagelkerke), and likelihood ratio test
