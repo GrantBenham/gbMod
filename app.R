@@ -2183,10 +2183,19 @@ server <- function(input, output, session) {
         # Get outlier/influential summary
         outlier_text <- paste(outlier_summary(), collapse = "<br>")
         
+        # Build filtered data after removal
+        outliers <- tryCatch(identify_outliers(), error = function(e) NULL)
+        filtered_data <- rv$original_dataset
+        if(!is.null(outliers) && length(outliers$cases) > 0) {
+          filtered_data <- rv$original_dataset[-outliers$cases, ]
+        }
+        
         # Binary counts for outcome/moderator
         bin_counts <- c(
           binary_count_lines(rv$original_dataset, input$outcome_var, "Outcome (original)"),
-          binary_count_lines(rv$original_dataset, input$moderator_var, "Moderator (original)")
+          binary_count_lines(rv$original_dataset, input$moderator_var, "Moderator (original)"),
+          binary_count_lines(filtered_data, input$outcome_var, "Outcome (after removal)"),
+          binary_count_lines(filtered_data, input$moderator_var, "Moderator (after removal)")
         )
         
         # For binary outcomes, skip normality and homoscedasticity tests
@@ -2207,7 +2216,7 @@ server <- function(input, output, session) {
           if(length(na.omit(bin_counts)) > 0) {
             paste(
               "<strong>Binary Variable Counts (original dataset):</strong><br>",
-              paste(bin_counts, collapse = "<br>"),
+              paste(na.omit(bin_counts), collapse = "<br>"),
               "<br><br>"
             )
           } else { "" },
@@ -2226,10 +2235,19 @@ server <- function(input, output, session) {
         # Get outlier summary
         outlier_text <- paste(outlier_summary(), collapse = "<br>")
         
+        # Build filtered data after removal
+        outliers <- tryCatch(identify_outliers(), error = function(e) NULL)
+        filtered_data <- rv$original_dataset
+        if(!is.null(outliers) && length(outliers$cases) > 0) {
+          filtered_data <- rv$original_dataset[-outliers$cases, ]
+        }
+        
         # Binary counts for outcome/moderator (only if binary)
         bin_counts <- c(
           binary_count_lines(rv$original_dataset, input$outcome_var, "Outcome (original)"),
-          binary_count_lines(rv$original_dataset, input$moderator_var, "Moderator (original)")
+          binary_count_lines(rv$original_dataset, input$moderator_var, "Moderator (original)"),
+          binary_count_lines(filtered_data, input$outcome_var, "Outcome (after removal)"),
+          binary_count_lines(filtered_data, input$moderator_var, "Moderator (after removal)")
         )
         
         # Run other diagnostics
@@ -2248,6 +2266,13 @@ server <- function(input, output, session) {
             )
           } else { "" },
           outlier_text,
+          if(length(na.omit(bin_counts)) > 0) {
+            paste(
+              "<br><strong>Binary Variable Counts (original vs after removal):</strong><br>",
+              paste(na.omit(bin_counts), collapse = "<br>"),
+              "<br><br>"
+            )
+          } else { "" },
           "<br><br>",
           "<strong>Normality Test:</strong><br>",
           normality$text,
