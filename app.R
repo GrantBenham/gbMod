@@ -132,7 +132,8 @@ ui <- fluidPage(
           
           # Add new explanatory note at the top
           div(style = "margin-bottom: 20px",
-            p(strong("Note:"), " These assumption checks are always performed on the original dataset. Results update automatically based on your selected variables and standardized residual threshold value.")
+            p(strong("Note:"), " These assumption checks are always performed on the original dataset. Results update automatically based on your selected variables and standardized residual threshold value."),
+            p(strong("Binary Outcomes:"), " If your outcome variable is binary (0/1), the app will automatically use logistic regression diagnostics. Standard regression assumptions (normality, homoscedasticity) do not apply to binary outcomes.")
           ),
           
           div(style = "margin-bottom: 20px",
@@ -164,7 +165,8 @@ ui <- fluidPage(
             h5("Normal Q-Q Plot"),
             p("This plot checks if residuals follow a normal distribution. Points should follow the diagonal line closely.",
               "Deviations at the ends are common and usually not problematic.",
-              "When bootstrapping is used, normality is less crucial as bootstrap methods don't assume normality."),
+              "When bootstrapping is used, normality is less crucial as bootstrap methods don't assume normality.",
+              strong("Note: This plot is not applicable for binary outcomes."), " For binary outcomes, logistic regression does not assume normality of residuals."),
             plotOutput("qq_plot", height = "400px", width = "600px")
           ),
           
@@ -197,18 +199,21 @@ ui <- fluidPage(
             )
           ),
           
-          div(style = "margin-bottom: 30px",
-            h5("Scale-Location Plot"),
-            p("This plot helps assess if the variance of residuals changes across the range of predicted values.",
-              "Look for:",
-              tags$ul(
-                tags$li("Relatively horizontal blue line"),
-                tags$li("Even spread of points around the line"),
-                tags$li("No clear funnel or fan shapes")
-              ),
-              "When bootstrapping is used, this assumption is relaxed somewhat."),
-            plotOutput("scale_location_plot", height = "400px", width = "600px")
-          )
+          conditionalPanel(
+            condition = "output.outcome_is_continuous === true",
+            div(style = "margin-bottom: 30px",
+              h5("Scale-Location Plot"),
+              p("This plot helps assess if the variance of residuals changes across the range of predicted values.",
+                "Look for:",
+                tags$ul(
+                  tags$li("Relatively horizontal blue line"),
+                  tags$li("Even spread of points around the line"),
+                  tags$li("No clear funnel or fan shapes")
+                ),
+                "When bootstrapping is used, this assumption is relaxed somewhat."),
+              plotOutput("scale_location_plot", height = "400px", width = "600px")
+            )
+          ),
         ),
         tabPanel("Moderation Analysis",
           h4("Analysis Results"),
@@ -467,20 +472,36 @@ server <- function(input, output, session) {
     }
     model_formula <- as.formula(paste(formula_terms, collapse = " "))
     
-    # Fit model and get standardized residuals
-    model <- lm(model_formula, data = rv$original_dataset)
-    std_resid <- rstandard(model)
+    # Check if outcome is binary
+    outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
     
-    # Identify outliers
-    outlier_cases <- which(abs(std_resid) > input$residual_threshold)
-    outlier_values <- std_resid[outlier_cases]
-    
-    list(
-      cases = outlier_cases,
-      values = outlier_values,
-      count = length(outlier_cases),
-      percentage = length(outlier_cases) / length(std_resid) * 100
-    )
+    if(outcome_is_binary) {
+      # For binary outcomes, outlier removal is not standard practice
+      # Return empty list to disable outlier removal
+      return(list(
+        cases = integer(0),
+        values = numeric(0),
+        count = 0,
+        percentage = 0,
+        is_binary = TRUE
+      ))
+    } else {
+      # For continuous outcomes, use linear regression
+      model <- lm(model_formula, data = rv$original_dataset)
+      std_resid <- rstandard(model)
+      
+      # Identify outliers
+      outlier_cases <- which(abs(std_resid) > input$residual_threshold)
+      outlier_values <- std_resid[outlier_cases]
+      
+      return(list(
+        cases = outlier_cases,
+        values = outlier_values,
+        count = length(outlier_cases),
+        percentage = length(outlier_cases) / length(std_resid) * 100,
+        is_binary = FALSE
+      ))
+    }
   })
   
   # Update dataset reactive to handle both original and filtered cases
@@ -831,6 +852,52 @@ server <- function(input, output, session) {
   
   # Add a reactive value to track JN plot availability
   jn_available <- reactiveVal(TRUE)
+  
+  # Helper function to detect if a variable is binary (0/1 or only 2 unique values)
+  is_binary_variable <- function(data, var_name) {
+    if(is.null(data) || is.null(var_name) || !var_name %in% names(data)) {
+      return(FALSE)
+    }
+    var_data <- data[[var_name]]
+    var_data <- var_data[!is.na(var_data)]
+    unique_vals <- unique(var_data)
+    # Check if only 2 unique values
+    if(length(unique_vals) == 2) {
+      return(TRUE)
+    }
+    return(FALSE)
+  }
+  
+  # Helper function to detect if outcome is binary from PROCESS output
+  is_binary_outcome <- reactive({
+    req(analysis_results())
+    process_output <- analysis_results()$output
+    # Check for "Coding of binary Y for logistic regression analysis" in output
+    any(grepl("Coding of binary Y for logistic regression", process_output, ignore.case = TRUE))
+  })
+  
+  # Helper function to check if moderator is dichotomous
+  is_dichotomous_moderator <- reactive({
+    req(rv$original_dataset, input$moderator_var)
+    is_binary_variable(rv$original_dataset, input$moderator_var)
+  })
+  
+  # Output to track if outcome is continuous (for conditionalPanel)
+  output$outcome_is_continuous <- reactive({
+    req(rv$original_dataset, input$outcome_var)
+    !is_binary_variable(rv$original_dataset, input$outcome_var)
+  })
+  outputOptions(output, "outcome_is_continuous", suspendWhenHidden = FALSE)
+  
+  # Update JN availability based on moderator being dichotomous
+  observe({
+    req(rv$original_dataset, input$moderator_var)
+    if(is_dichotomous_moderator()) {
+      jn_available(FALSE)
+    } else {
+      jn_available(TRUE)
+    }
+  })
 
   # Diagnostic check functions
   check_normality <- function(model) {
@@ -866,6 +933,9 @@ server <- function(input, output, session) {
       # Basic model diagnostics
       n <- nobs(model)
       
+      # Check if model is logistic (glm with binomial family)
+      is_logistic <- inherits(model, "glm") && model$family$family == "binomial"
+      
       # Handle VIF calculation for moderation
       vif_result <- tryCatch({
         # Get model terms
@@ -877,7 +947,14 @@ server <- function(input, output, session) {
           if(length(main_effects) > 1) {
             # Create model without interaction for VIF
             main_formula <- reformulate(main_effects, response = all.vars(formula(model))[1])
-            main_model <- lm(main_formula, data = model$model)
+            
+            # Use appropriate model type
+            if(is_logistic) {
+              main_model <- glm(main_formula, data = model$model, family = binomial())
+            } else {
+              main_model <- lm(main_formula, data = model$model)
+            }
+            
             vif_values <- suppressWarnings(car::vif(main_model))
             
             # Format VIF results
@@ -898,7 +975,11 @@ server <- function(input, output, session) {
       c(
         sprintf("Sample size: %d", n),
         vif_result,
-        "Note: VIF calculated only for main effects, excluding interaction term"
+        if(is_logistic) {
+          "Note: VIF calculated only for main effects, excluding interaction term. For binary outcomes, VIF interpretation is similar to linear regression."
+        } else {
+          "Note: VIF calculated only for main effects, excluding interaction term"
+        }
       )
     }, error = function(e) {
       c(
@@ -920,17 +1001,26 @@ server <- function(input, output, session) {
     coeffs <- analysis_results()$coefficients
     data_used <- analysis_results()$data_used  # Use stored data
     
+    # Check if outcome is binary
+    outcome_is_binary <- is_binary_outcome()
+    
     # Get moderator levels based on stored data
-    moderator_levels <- if(input$conditioning_values == "0") {
-      mod_mean <- mean(data_used[[input$moderator_var]], na.rm = TRUE)
-      mod_sd <- sd(data_used[[input$moderator_var]], na.rm = TRUE)
-      values <- c(mod_mean - mod_sd, mod_mean, mod_mean + mod_sd)
-      round(values, input$decimal_places)
+    # For dichotomous moderators, use the two unique values
+    if(is_dichotomous_moderator()) {
+      moderator_levels <- sort(unique(data_used[[input$moderator_var]][!is.na(data_used[[input$moderator_var]])]))
+      moderator_levels <- round(moderator_levels, input$decimal_places)
     } else {
-      values <- quantile(data_used[[input$moderator_var]], 
-                        probs = c(0.16, 0.50, 0.84), 
-                        na.rm = TRUE)
-      round(values, input$decimal_places)
+      moderator_levels <- if(input$conditioning_values == "0") {
+        mod_mean <- mean(data_used[[input$moderator_var]], na.rm = TRUE)
+        mod_sd <- sd(data_used[[input$moderator_var]], na.rm = TRUE)
+        values <- c(mod_mean - mod_sd, mod_mean, mod_mean + mod_sd)
+        round(values, input$decimal_places)
+      } else {
+        values <- quantile(data_used[[input$moderator_var]], 
+                          probs = c(0.16, 0.50, 0.84), 
+                          na.rm = TRUE)
+        round(values, input$decimal_places)
+      }
     }
     
     # Create predictor sequence based on plot type
@@ -961,12 +1051,29 @@ server <- function(input, output, session) {
     )
     
     # Calculate predicted values
-    plot_data$Outcome <- coeffs["constant"] +
-      coeffs["predictor"] * plot_data$Predictor +
-      coeffs["moderator"] * plot_data$Moderator +
-      coeffs["interaction"] * plot_data$Predictor * plot_data$Moderator
+    if(outcome_is_binary) {
+      # For binary outcomes, coefficients are log-odds
+      # Convert to probabilities using plogis (inverse logit)
+      log_odds <- coeffs["constant"] +
+        coeffs["predictor"] * plot_data$Predictor +
+        coeffs["moderator"] * plot_data$Moderator +
+        coeffs["interaction"] * plot_data$Predictor * plot_data$Moderator
+      plot_data$Outcome <- plogis(log_odds)  # Convert log-odds to probabilities
+    } else {
+      # For continuous outcomes, use linear prediction
+      plot_data$Outcome <- coeffs["constant"] +
+        coeffs["predictor"] * plot_data$Predictor +
+        coeffs["moderator"] * plot_data$Moderator +
+        coeffs["interaction"] * plot_data$Predictor * plot_data$Moderator
+    }
     
     # Create plot with formatted moderator levels
+    y_label_text <- if(outcome_is_binary) {
+      if(input$y_label != "") paste(input$y_label, "(Probability)") else "Predicted Probability"
+    } else {
+      if(input$y_label != "") input$y_label else input$outcome_var
+    }
+    
     p <- ggplot(plot_data, aes(
       x = Predictor, 
       y = Outcome,
@@ -977,10 +1084,11 @@ server <- function(input, output, session) {
     )) +
       geom_line(size = 1) +
       {if(input$custom_y_axis) coord_cartesian(ylim = c(input$y_axis_min, input$y_axis_max))} +
+      {if(outcome_is_binary && !input$custom_y_axis) coord_cartesian(ylim = c(0, 1))} +
       labs(
         title = input$slopes_title,
         x = input$x_label,
-        y = input$y_label,
+        y = y_label_text,
         color = ifelse(input$moderator_label != "", 
                       input$moderator_label, 
                       paste0(input$moderator_var, " Levels")),
@@ -1013,15 +1121,24 @@ server <- function(input, output, session) {
         coeffs <- analysis_results()$coefficients
         dataset <- analysis_results()$data_used  # Use stored data
         
+        # Check if outcome is binary
+        outcome_is_binary <- is_binary_outcome()
+        
         # Get moderator levels based on stored data
-        moderator_levels <- if(input$conditioning_values == "0") {
-          mod_mean <- mean(dataset[[input$moderator_var]], na.rm = TRUE)
-          mod_sd <- sd(dataset[[input$moderator_var]], na.rm = TRUE)
-          c(mod_mean - mod_sd, mod_mean, mod_mean + mod_sd)
+        # For dichotomous moderators, use the two unique values
+        if(is_dichotomous_moderator()) {
+          moderator_levels <- sort(unique(dataset[[input$moderator_var]][!is.na(dataset[[input$moderator_var]])]))
+          moderator_levels <- round(moderator_levels, input$decimal_places)
         } else {
-          quantile(dataset[[input$moderator_var]], probs = c(0.16, 0.50, 0.84), na.rm = TRUE)
+          moderator_levels <- if(input$conditioning_values == "0") {
+            mod_mean <- mean(dataset[[input$moderator_var]], na.rm = TRUE)
+            mod_sd <- sd(dataset[[input$moderator_var]], na.rm = TRUE)
+            c(mod_mean - mod_sd, mod_mean, mod_mean + mod_sd)
+          } else {
+            quantile(dataset[[input$moderator_var]], probs = c(0.16, 0.50, 0.84), na.rm = TRUE)
+          }
+          moderator_levels <- round(moderator_levels, input$decimal_places)
         }
-        moderator_levels <- round(moderator_levels, input$decimal_places)
         
         # Create predictor sequence based on plot type
         if(input$slopes_type == "full") {
@@ -1051,12 +1168,29 @@ server <- function(input, output, session) {
         )
         
         # Calculate predicted values
-        plot_data$Outcome <- coeffs["constant"] +
-          coeffs["predictor"] * plot_data$Predictor +
-          coeffs["moderator"] * plot_data$Moderator +
-          coeffs["interaction"] * plot_data$Predictor * plot_data$Moderator
+        if(outcome_is_binary) {
+          # For binary outcomes, coefficients are log-odds
+          # Convert to probabilities using plogis (inverse logit)
+          log_odds <- coeffs["constant"] +
+            coeffs["predictor"] * plot_data$Predictor +
+            coeffs["moderator"] * plot_data$Moderator +
+            coeffs["interaction"] * plot_data$Predictor * plot_data$Moderator
+          plot_data$Outcome <- plogis(log_odds)  # Convert log-odds to probabilities
+        } else {
+          # For continuous outcomes, use linear prediction
+          plot_data$Outcome <- coeffs["constant"] +
+            coeffs["predictor"] * plot_data$Predictor +
+            coeffs["moderator"] * plot_data$Moderator +
+            coeffs["interaction"] * plot_data$Predictor * plot_data$Moderator
+        }
         
         # Create and save plot
+        y_label_text <- if(outcome_is_binary) {
+          if(input$y_label != "") paste(input$y_label, "(Probability)") else "Predicted Probability"
+        } else {
+          if(input$y_label != "") input$y_label else input$outcome_var
+        }
+        
         p <- ggplot(plot_data, aes(
           x = Predictor, 
           y = Outcome,
@@ -1065,10 +1199,11 @@ server <- function(input, output, session) {
         )) +
           geom_line(size = 1) +
           {if(input$custom_y_axis) coord_cartesian(ylim = c(input$y_axis_min, input$y_axis_max))} +
+          {if(outcome_is_binary && !input$custom_y_axis) coord_cartesian(ylim = c(0, 1))} +
           labs(
             title = input$slopes_title,
             x = input$x_label,
-            y = input$y_label,
+            y = y_label_text,
             color = ifelse(input$moderator_label != "", 
                           input$moderator_label, 
                           paste0(input$moderator_var, " Levels")),
@@ -1278,25 +1413,33 @@ server <- function(input, output, session) {
       }
       model_formula <- as.formula(paste(formula_terms, collapse = " "))
       
-      # Always use original dataset for assumption checks
-      model <- lm(model_formula, data = rv$original_dataset)
+      # Check if outcome is binary
+      outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
       
-      # Create Q-Q plot
-      ggplot(data.frame(residuals = rstandard(model)), aes(sample = residuals)) +
-        stat_qq() + 
-        stat_qq_line() +
-        theme_minimal() +
-        labs(title = "Normal Q-Q Plot",
-             x = "Theoretical Quantiles",
-             y = "Sample Quantiles") +
-        theme(
-          text = element_text(size = 14),
-          axis.title = element_text(size = 16),
-          axis.text = element_text(size = 14),
-          plot.title = element_text(size = 18, hjust = 0.5),
-          axis.line = element_line(color = "black", linewidth = 0.5),
-          axis.ticks = element_line(color = "black", linewidth = 0.5)
-        )
+      if(outcome_is_binary) {
+        # For binary outcomes, return NULL to hide the plot
+        return(NULL)
+      } else {
+        # Always use original dataset for assumption checks
+        model <- lm(model_formula, data = rv$original_dataset)
+        
+        # Create Q-Q plot
+        ggplot(data.frame(residuals = rstandard(model)), aes(sample = residuals)) +
+          stat_qq() + 
+          stat_qq_line() +
+          theme_minimal() +
+          labs(title = "Normal Q-Q Plot",
+               x = "Theoretical Quantiles",
+               y = "Sample Quantiles") +
+          theme(
+            text = element_text(size = 14),
+            axis.title = element_text(size = 16),
+            axis.text = element_text(size = 14),
+            plot.title = element_text(size = 18, hjust = 0.5),
+            axis.line = element_line(color = "black", linewidth = 0.5),
+            axis.ticks = element_line(color = "black", linewidth = 0.5)
+          )
+      }
     }, error = function(e) {
       plot.new()
       text(0.5, 0.5, "Error generating Q-Q plot", cex = 1.2)
@@ -1315,43 +1458,80 @@ server <- function(input, output, session) {
       }
       model_formula <- as.formula(paste(formula_terms, collapse = " "))
       
-      # Fit model using original dataset
-      model <- lm(model_formula, data = rv$original_dataset)
+      # Check if outcome is binary
+      outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
       
-      # Create diagnostic data
-      fitted_values <- fitted(model)
-      residuals <- residuals(model)
-      
-      # Add outlier information
-      std_resid <- rstandard(model)
-      is_outlier <- abs(std_resid) > input$residual_threshold
-      
-      # Create plot data
-      plot_data <- data.frame(
-        fitted = fitted_values,
-        residuals = residuals,
-        is_outlier = is_outlier
-      )
-      
-      # Create enhanced residuals vs fitted plot
-      ggplot(plot_data, aes(x = fitted, y = residuals)) +
-        geom_point(aes(color = is_outlier), alpha = 0.6) +
-        scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
-        geom_smooth(method = "loess", se = FALSE, color = "blue") +
-        geom_hline(yintercept = 0, linetype = "dashed") +
-        theme_minimal() +
-        labs(title = "Residuals vs Fitted",
-             x = "Fitted values",
-             y = "Residuals") +
-        theme(
-          text = element_text(size = 14),
-          axis.title = element_text(size = 16),
-          axis.text = element_text(size = 14),
-          plot.title = element_text(size = 18, hjust = 0.5),
-          legend.position = "none",
-          axis.line = element_line(color = "black", linewidth = 0.5),
-          axis.ticks = element_line(color = "black", linewidth = 0.5)
+      if(outcome_is_binary) {
+        # For binary outcomes, use logistic regression
+        model <- glm(model_formula, data = rv$original_dataset, family = binomial())
+        fitted_values <- fitted(model)  # These are probabilities
+        pearson_resid <- residuals(model, type = "pearson")
+        # Note: For binary outcomes, we don't highlight "outliers" in the same way
+        # as they have different interpretation
+        
+        plot_data <- data.frame(
+          fitted = fitted_values,
+          residuals = pearson_resid
         )
+        
+        ggplot(plot_data, aes(x = fitted, y = residuals)) +
+          geom_point(alpha = 0.6, color = "black") +
+          geom_smooth(method = "loess", se = FALSE, color = "blue") +
+          geom_hline(yintercept = 0, linetype = "dashed") +
+          theme_minimal() +
+          labs(title = "Residuals vs Fitted (Logistic Regression)",
+               x = "Fitted probabilities",
+               y = "Pearson residuals",
+               subtitle = "Note: For binary outcomes, residuals show different patterns than linear regression") +
+          theme(
+            text = element_text(size = 14),
+            axis.title = element_text(size = 16),
+            axis.text = element_text(size = 14),
+            plot.title = element_text(size = 18, hjust = 0.5),
+            plot.subtitle = element_text(size = 12, hjust = 0.5),
+            legend.position = "none",
+            axis.line = element_line(color = "black", linewidth = 0.5),
+            axis.ticks = element_line(color = "black", linewidth = 0.5)
+          )
+      } else {
+        # Fit model using original dataset
+        model <- lm(model_formula, data = rv$original_dataset)
+        
+        # Create diagnostic data
+        fitted_values <- fitted(model)
+        residuals <- residuals(model)
+        
+        # Add outlier information
+        std_resid <- rstandard(model)
+        is_outlier <- abs(std_resid) > input$residual_threshold
+        
+        # Create plot data
+        plot_data <- data.frame(
+          fitted = fitted_values,
+          residuals = residuals,
+          is_outlier = is_outlier
+        )
+        
+        # Create enhanced residuals vs fitted plot
+        ggplot(plot_data, aes(x = fitted, y = residuals)) +
+          geom_point(aes(color = is_outlier), alpha = 0.6) +
+          scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+          geom_smooth(method = "loess", se = FALSE, color = "blue") +
+          geom_hline(yintercept = 0, linetype = "dashed") +
+          theme_minimal() +
+          labs(title = "Residuals vs Fitted",
+               x = "Fitted values",
+               y = "Residuals") +
+          theme(
+            text = element_text(size = 14),
+            axis.title = element_text(size = 16),
+            axis.text = element_text(size = 14),
+            plot.title = element_text(size = 18, hjust = 0.5),
+            legend.position = "none",
+            axis.line = element_line(color = "black", linewidth = 0.5),
+            axis.ticks = element_line(color = "black", linewidth = 0.5)
+          )
+      }
     }, error = function(e) {
       plot.new()
       text(0.5, 0.5, "Error generating residuals plot", cex = 1.2)
@@ -1370,42 +1550,50 @@ server <- function(input, output, session) {
       }
       model_formula <- as.formula(paste(formula_terms, collapse = " "))
       
-      # Fit model using original dataset
-      model <- lm(model_formula, data = rv$original_dataset)
+      # Check if outcome is binary
+      outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
       
-      # Create diagnostic data
-      fitted_values <- fitted(model)
-      std_residuals <- rstandard(model)
-      sqrt_abs_resid <- sqrt(abs(std_residuals))
-      
-      # Add outlier information
-      is_outlier <- abs(std_residuals) > input$residual_threshold
-      
-      # Create plot data
-      plot_data <- data.frame(
-        fitted = fitted_values,
-        sqrt_abs_resid = sqrt_abs_resid,
-        is_outlier = is_outlier
-      )
-      
-      # Create enhanced scale-location plot
-      ggplot(plot_data, aes(x = fitted, y = sqrt_abs_resid)) +
-        geom_point(aes(color = is_outlier), alpha = 0.6) +
-        scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
-        geom_smooth(method = "loess", se = FALSE, color = "blue") +
-        theme_minimal() +
-        labs(title = "Scale-Location Plot",
-             x = "Fitted values",
-             y = expression(sqrt("|Standardized residuals|"))) +
-        theme(
-          text = element_text(size = 14),
-          axis.title = element_text(size = 16),
-          axis.text = element_text(size = 14),
-          plot.title = element_text(size = 18, hjust = 0.5),
-          legend.position = "none",
-          axis.line = element_line(color = "black", linewidth = 0.5),
-          axis.ticks = element_line(color = "black", linewidth = 0.5)
+      if(outcome_is_binary) {
+        # For binary outcomes, return NULL to hide the plot
+        return(NULL)
+      } else {
+        # Fit model using original dataset
+        model <- lm(model_formula, data = rv$original_dataset)
+        
+        # Create diagnostic data
+        fitted_values <- fitted(model)
+        std_residuals <- rstandard(model)
+        sqrt_abs_resid <- sqrt(abs(std_residuals))
+        
+        # Add outlier information
+        is_outlier <- abs(std_residuals) > input$residual_threshold
+        
+        # Create plot data
+        plot_data <- data.frame(
+          fitted = fitted_values,
+          sqrt_abs_resid = sqrt_abs_resid,
+          is_outlier = is_outlier
         )
+        
+        # Create enhanced scale-location plot
+        ggplot(plot_data, aes(x = fitted, y = sqrt_abs_resid)) +
+          geom_point(aes(color = is_outlier), alpha = 0.6) +
+          scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+          geom_smooth(method = "loess", se = FALSE, color = "blue") +
+          theme_minimal() +
+          labs(title = "Scale-Location Plot",
+               x = "Fitted values",
+               y = expression(sqrt("|Standardized residuals|"))) +
+          theme(
+            text = element_text(size = 14),
+            axis.title = element_text(size = 16),
+            axis.text = element_text(size = 14),
+            plot.title = element_text(size = 18, hjust = 0.5),
+            legend.position = "none",
+            axis.line = element_line(color = "black", linewidth = 0.5),
+            axis.ticks = element_line(color = "black", linewidth = 0.5)
+          )
+      }
     }, error = function(e) {
       plot.new()
       text(0.5, 0.5, "Error generating scale-location plot", cex = 1.2)
@@ -1424,7 +1612,29 @@ server <- function(input, output, session) {
         }
         model_formula <- as.formula(paste(formula_terms, collapse = " "))
         
-        # Fit model using original dataset
+        # Check if outcome is binary
+        outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
+        
+        if(outcome_is_binary) {
+          # For binary outcomes, standardized residuals from linear regression are inappropriate
+          return(c(
+            "<strong>Standardized Residual Analysis:</strong>",
+            "<em>Note: Your outcome variable is binary (0/1).</em>",
+            "<br>",
+            "<strong>Important:</strong> Standardized residuals from linear regression are not appropriate for binary outcomes.",
+            "For binary outcomes:",
+            "<ul>",
+            "<li>PROCESS uses logistic regression, which has different assumptions</li>",
+            "<li>Residuals in logistic regression are not normally distributed</li>",
+            "<li>Outlier removal based on residuals is not standard practice for binary outcomes</li>",
+            "<li>Large residuals may indicate model misspecification rather than outliers</li>",
+            "</ul>",
+            "<strong>Recommendation:</strong> Do not remove cases based on residuals for binary outcomes.",
+            "If you have concerns about specific cases, examine them individually for data entry errors or other issues."
+          ))
+        }
+        
+        # For continuous outcomes, use linear regression
         model <- lm(model_formula, data = rv$original_dataset)
         
         # Get standardized residuals
@@ -1483,44 +1693,77 @@ server <- function(input, output, session) {
       }
       model_formula <- as.formula(paste(formula_terms, collapse = " "))
       
-      # Fit model using original dataset
-      model <- lm(model_formula, data = rv$original_dataset)
+      # Check if outcome is binary
+      outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
       
-      # Get outlier summary from reactive - Add debug printing
-      print("Debug - Getting outlier summary")
-      outlier_text <- paste(outlier_summary(), collapse = "<br>")
-      print("Debug - Outlier text created:")
-      print(outlier_text)
-      
-      # Run other diagnostics
-      normality <- check_normality(model)
-      homoscedasticity <- test_homoscedasticity(model)
-      diagnostics <- diagnostic_report(model)
-      
-      # Create final output
-      output_text <- paste(
-        "<div style='font-family: Courier, monospace; white-space: pre-wrap;'>",
-        outlier_text,
-        "<br><br>",
-        "<strong>Normality Test:</strong><br>",
-        normality$text,
-        "<br><em>Interpretation: A significant p-value (< .05) suggests non-normality. ",
-        "However, with large samples, minor deviations often become significant. ",
-        "Visual inspection of the Q-Q plot is often more informative.</em>",
-        "<br><br>",
-        "<strong>Homoscedasticity Test:</strong><br>",
-        homoscedasticity,
-        "<br><em>Interpretation: A significant p-value suggests non-constant variance. ",
-        "Consider the Residuals vs Fitted plot for visual confirmation.</em>",
-        "<br><br>",
-        "<strong>Additional Diagnostics:</strong><br>",
-        paste(diagnostics, collapse = "<br>"),
-        "<br><em>Interpretation:<br>",
-        "- VIF > 5 suggests potential multicollinearity issues<br>",
-        "- With bootstrapping, these diagnostics become less crucial as bootstrap methods are more robust to violations</em>",
-        "</div>",
-        sep = ""
-      )
+      if(outcome_is_binary) {
+        # For binary outcomes, use logistic regression
+        model <- glm(model_formula, data = rv$original_dataset, family = binomial())
+        
+        # Get outlier summary
+        outlier_text <- paste(outlier_summary(), collapse = "<br>")
+        
+        # For binary outcomes, skip normality and homoscedasticity tests
+        # These assumptions don't apply to logistic regression
+        diagnostics <- diagnostic_report(model)
+        
+        output_text <- paste(
+          "<div style='font-family: Courier, monospace; white-space: pre-wrap;'>",
+          "<strong>Note: Binary Outcome Detected</strong><br>",
+          "<em>Your outcome variable is binary (0/1). PROCESS will use logistic regression for this analysis.</em><br><br>",
+          "<strong>Important:</strong> Standard regression assumptions (normality, homoscedasticity) do not apply to logistic regression.<br>",
+          "For binary outcomes, different diagnostic approaches are needed:<br>",
+          "<ul>",
+          "<li><strong>Linearity:</strong> Check linearity of continuous predictors with the logit of the outcome</li>",
+          "<li><strong>Influential observations:</strong> Review leverage values and Cook's distance (not shown here)</li>",
+          "<li><strong>Model fit:</strong> Use pseudo-R² measures (McFadden, Cox-Snell, Nagelkerke) shown in PROCESS output</li>",
+          "<li><strong>Multicollinearity:</strong> VIF can still be calculated for predictors</li>",
+          "</ul><br>",
+          outlier_text,
+          "<br><br>",
+          "<strong>Additional Diagnostics:</strong><br>",
+          paste(diagnostics, collapse = "<br>"),
+          "<br><em>Note: VIF calculated for main effects only. For binary outcomes, focus on model fit statistics and residual patterns rather than normality/homoscedasticity.</em>",
+          "</div>",
+          sep = ""
+        )
+      } else {
+        # For continuous outcomes, use linear regression
+        model <- lm(model_formula, data = rv$original_dataset)
+        
+        # Get outlier summary
+        outlier_text <- paste(outlier_summary(), collapse = "<br>")
+        
+        # Run other diagnostics
+        normality <- check_normality(model)
+        homoscedasticity <- test_homoscedasticity(model)
+        diagnostics <- diagnostic_report(model)
+        
+        # Create final output
+        output_text <- paste(
+          "<div style='font-family: Courier, monospace; white-space: pre-wrap;'>",
+          outlier_text,
+          "<br><br>",
+          "<strong>Normality Test:</strong><br>",
+          normality$text,
+          "<br><em>Interpretation: A significant p-value (< .05) suggests non-normality. ",
+          "However, with large samples, minor deviations often become significant. ",
+          "Visual inspection of the Q-Q plot is often more informative.</em>",
+          "<br><br>",
+          "<strong>Homoscedasticity Test:</strong><br>",
+          homoscedasticity,
+          "<br><em>Interpretation: A significant p-value suggests non-constant variance. ",
+          "Consider the Residuals vs Fitted plot for visual confirmation.</em>",
+          "<br><br>",
+          "<strong>Additional Diagnostics:</strong><br>",
+          paste(diagnostics, collapse = "<br>"),
+          "<br><em>Interpretation:<br>",
+          "- VIF > 5 suggests potential multicollinearity issues<br>",
+          "- With bootstrapping, these diagnostics become less crucial as bootstrap methods are more robust to violations</em>",
+          "</div>",
+          sep = ""
+        )
+      }
       
       HTML(output_text)
       
@@ -1600,7 +1843,13 @@ server <- function(input, output, session) {
       shinyjs::disable("run_analysis_no_outliers")
     } else {
       shinyjs::enable("run_analysis")
-      shinyjs::enable("run_analysis_no_outliers")
+      # Disable outlier removal for binary outcomes
+      outcome_is_binary <- is_binary_variable(rv$original_dataset, input$outcome_var)
+      if(outcome_is_binary) {
+        shinyjs::disable("run_analysis_no_outliers")
+      } else {
+        shinyjs::enable("run_analysis_no_outliers")
+      }
     }
   })
   
@@ -1669,22 +1918,12 @@ server <- function(input, output, session) {
   
   # Function to calculate bivariate correlations with guidance
   create_bivariate_correlations <- function(data, predictor_var, outcome_var, settings) {
+    # Check if outcome is binary
+    outcome_is_binary <- is_binary_variable(data, outcome_var)
+    
     # Remove missing data for both variables
     complete_data <- data[complete.cases(data[c(predictor_var, outcome_var)]), ]
     n <- nrow(complete_data)
-    
-    # Calculate Pearson correlation
-    pearson_test <- cor.test(complete_data[[predictor_var]], complete_data[[outcome_var]], 
-                             method = "pearson")
-    pearson_r <- pearson_test$estimate
-    pearson_p <- pearson_test$p.value
-    pearson_ci <- pearson_test$conf.int
-    
-    # Calculate Spearman correlation
-    spearman_test <- cor.test(complete_data[[predictor_var]], complete_data[[outcome_var]], 
-                              method = "spearman")
-    spearman_rho <- spearman_test$estimate
-    spearman_p <- spearman_test$p.value
     
     # Determine dataset description
     dataset_desc <- if(settings$outliers_removed) {
@@ -1694,42 +1933,91 @@ server <- function(input, output, session) {
       "the original dataset (all cases included)"
     }
     
-    # Create formatted output
-    output <- c(
-      "<br><strong>BIVARIATE CORRELATION: PREDICTOR AND OUTCOME</strong>",
-      sprintf("<em>This shows the zero-order (unadjusted) relationship between the predictor and outcome variables, calculated on %s:</em>", dataset_desc),
-      "",
-      sprintf("<strong>Pearson's r:</strong> %.4f, 95%% CI [%.4f, %.4f], p %s", 
-              pearson_r, pearson_ci[1], pearson_ci[2],
-              ifelse(pearson_p < .001, "< .001", sprintf("= %.3f", pearson_p))),
-      sprintf("<strong>Spearman's ρ:</strong> %.4f, p %s",
-              spearman_rho,
-              ifelse(spearman_p < .001, "< .001", sprintf("= %.3f", spearman_p))),
-      sprintf("<em>Sample size: %d cases (listwise deletion for these two variables)</em>", n),
-      "",
-      "<strong>Understanding These Correlations:</strong>",
-      "<ul>",
-      "<li><strong>Zero-order correlation:</strong> This is the simple bivariate relationship between predictor and outcome, without controlling for any other variables.</li>",
-      "<li><strong>Pearson's r:</strong> Measures linear relationships. Assumes normality and linearity. Use when variables are continuous and normally distributed.</li>",
-      "<li><strong>Spearman's ρ:</strong> Measures monotonic relationships (rank-based). More robust to outliers and non-normality. Use when variables are ordinal, have outliers, or show non-linear monotonic relationships.</li>",
-      "<li><strong>Important note about datasets:</strong> This bivariate correlation is calculated on the <strong>original dataset (all cases)</strong>, regardless of whether outliers were removed for the moderation analysis below. This provides a baseline comparison showing the unadjusted relationship in the complete data.</li>",
-      "<li><strong>Why moderation coefficients differ:</strong> The regression coefficients in the moderation analysis are <strong>partial effects</strong> that control for:",
-      "<ul>",
-      "<li>The moderator variable</li>",
-      "<li>The interaction term (predictor × moderator)</li>",
-      if(!is.null(settings$covariates)) sprintf("<li>Covariate(s): %s</li>", paste(settings$covariates, collapse = ", ")) else NULL,
-      "</ul>",
-      if(settings$outliers_removed) {
-        sprintf("Additionally, the moderation analysis below is based on data with %d outlier%s removed, which may also contribute to differences from the bivariate correlation above.", 
-                settings$outliers_count, ifelse(settings$outliers_count == 1, "", "s"))
-      } else {
-        "The moderation analysis uses the same dataset as this bivariate correlation."
-      },
-      "This means the predictor's coefficient represents the effect of the predictor <em>while holding the moderator (and interaction, and covariates) constant</em>, which is why it differs from the zero-order correlation above.</li>",
-      "</ul>",
-      "<em>Note: A significant zero-order correlation does not guarantee a significant partial effect in moderation, and vice versa. The moderation analysis provides more nuanced information about how the relationship changes across moderator levels.</em>",
-      ""
-    )
+    if(outcome_is_binary) {
+      # For binary outcomes, provide point-biserial correlation (which is a Pearson correlation)
+      # but with appropriate interpretation
+      pearson_test <- cor.test(complete_data[[predictor_var]], complete_data[[outcome_var]], 
+                               method = "pearson")
+      pearson_r <- pearson_test$estimate
+      pearson_p <- pearson_test$p.value
+      pearson_ci <- pearson_test$conf.int
+      
+      # Create formatted output for binary outcomes
+      output <- c(
+        "<br><strong>BIVARIATE CORRELATION: PREDICTOR AND OUTCOME</strong>",
+        sprintf("<em>This shows the zero-order (unadjusted) relationship between the predictor and outcome variables, calculated on %s:</em>", dataset_desc),
+        "",
+        sprintf("<strong>Point-biserial correlation (Pearson's r):</strong> %.4f, 95%% CI [%.4f, %.4f], p %s", 
+                pearson_r, pearson_ci[1], pearson_ci[2],
+                ifelse(pearson_p < .001, "< .001", sprintf("= %.3f", pearson_p))),
+        sprintf("<em>Sample size: %d cases (listwise deletion for these two variables)</em>", n),
+        "",
+        "<strong>Understanding This Correlation:</strong>",
+        "<ul>",
+        "<li><strong>Point-biserial correlation:</strong> This is a special case of Pearson's r when one variable is binary (0/1) and the other is continuous. It measures the linear relationship between the continuous predictor and the binary outcome.</li>",
+        "<li><strong>Interpretation:</strong> The correlation coefficient indicates the strength and direction of the relationship. A positive correlation means higher predictor values are associated with the outcome being 1 (vs. 0).</li>",
+        "<li><strong>Note:</strong> For binary outcomes, PROCESS uses logistic regression in the moderation analysis below, which provides odds ratios and log-odds coefficients. These are on a different scale than this correlation coefficient.</li>",
+        "<li><strong>Why moderation coefficients differ:</strong> The regression coefficients in the moderation analysis are <strong>partial effects</strong> (log-odds) that control for:",
+        "<ul>",
+        "<li>The moderator variable</li>",
+        "<li>The interaction term (predictor × moderator)</li>",
+        if(!is.null(settings$covariates)) sprintf("<li>Covariate(s): %s</li>", paste(settings$covariates, collapse = ", ")) else NULL,
+        "</ul>",
+        "Additionally, the moderation analysis uses logistic regression (log-odds scale), while this correlation is on the original scale. This is why they differ.</li>",
+        "</ul>",
+        "<em>Note: A significant zero-order correlation does not guarantee a significant partial effect in moderation, and vice versa. The moderation analysis provides more nuanced information about how the relationship changes across moderator levels.</em>",
+        ""
+      )
+    } else {
+      # For continuous outcomes, provide both Pearson and Spearman
+      pearson_test <- cor.test(complete_data[[predictor_var]], complete_data[[outcome_var]], 
+                               method = "pearson")
+      pearson_r <- pearson_test$estimate
+      pearson_p <- pearson_test$p.value
+      pearson_ci <- pearson_test$conf.int
+      
+      spearman_test <- cor.test(complete_data[[predictor_var]], complete_data[[outcome_var]], 
+                                method = "spearman")
+      spearman_rho <- spearman_test$estimate
+      spearman_p <- spearman_test$p.value
+      
+      # Create formatted output for continuous outcomes
+      output <- c(
+        "<br><strong>BIVARIATE CORRELATION: PREDICTOR AND OUTCOME</strong>",
+        sprintf("<em>This shows the zero-order (unadjusted) relationship between the predictor and outcome variables, calculated on %s:</em>", dataset_desc),
+        "",
+        sprintf("<strong>Pearson's r:</strong> %.4f, 95%% CI [%.4f, %.4f], p %s", 
+                pearson_r, pearson_ci[1], pearson_ci[2],
+                ifelse(pearson_p < .001, "< .001", sprintf("= %.3f", pearson_p))),
+        sprintf("<strong>Spearman's ρ:</strong> %.4f, p %s",
+                spearman_rho,
+                ifelse(spearman_p < .001, "< .001", sprintf("= %.3f", spearman_p))),
+        sprintf("<em>Sample size: %d cases (listwise deletion for these two variables)</em>", n),
+        "",
+        "<strong>Understanding These Correlations:</strong>",
+        "<ul>",
+        "<li><strong>Zero-order correlation:</strong> This is the simple bivariate relationship between predictor and outcome, without controlling for any other variables.</li>",
+        "<li><strong>Pearson's r:</strong> Measures linear relationships. Assumes normality and linearity. Use when variables are continuous and normally distributed.</li>",
+        "<li><strong>Spearman's ρ:</strong> Measures monotonic relationships (rank-based). More robust to outliers and non-normality. Use when variables are ordinal, have outliers, or show non-linear monotonic relationships.</li>",
+        "<li><strong>Important note about datasets:</strong> This bivariate correlation is calculated on the <strong>original dataset (all cases)</strong>, regardless of whether outliers were removed for the moderation analysis below. This provides a baseline comparison showing the unadjusted relationship in the complete data.</li>",
+        "<li><strong>Why moderation coefficients differ:</strong> The regression coefficients in the moderation analysis are <strong>partial effects</strong> that control for:",
+        "<ul>",
+        "<li>The moderator variable</li>",
+        "<li>The interaction term (predictor × moderator)</li>",
+        if(!is.null(settings$covariates)) sprintf("<li>Covariate(s): %s</li>", paste(settings$covariates, collapse = ", ")) else NULL,
+        "</ul>",
+        if(settings$outliers_removed) {
+          sprintf("Additionally, the moderation analysis below is based on data with %d outlier%s removed, which may also contribute to differences from the bivariate correlation above.", 
+                  settings$outliers_count, ifelse(settings$outliers_count == 1, "", "s"))
+        } else {
+          "The moderation analysis uses the same dataset as this bivariate correlation."
+        },
+        "This means the predictor's coefficient represents the effect of the predictor <em>while holding the moderator (and interaction, and covariates) constant</em>, which is why it differs from the zero-order correlation above.</li>",
+        "</ul>",
+        "<em>Note: A significant zero-order correlation does not guarantee a significant partial effect in moderation, and vice versa. The moderation analysis provides more nuanced information about how the relationship changes across moderator levels.</em>",
+        ""
+      )
+    }
     
     # Remove NULL elements
     output <- output[!sapply(output, is.null)]
