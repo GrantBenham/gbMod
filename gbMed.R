@@ -2136,29 +2136,81 @@ server <- function(input, output, session) {
       "With Standardized Residual Outliers Removed"
     }
     
+    # Check if button should be enabled
+    button_enabled <- FALSE
+    if (!is.null(input$predictor_var) && input$predictor_var != "" &&
+        !is.null(input$mediator_vars) && length(input$mediator_vars) > 0) {
+      tryCatch({
+        outliers <- identify_outliers()
+        if(!is.null(outliers) && outliers$count > 0) {
+          # Check if removing outliers would leave enough cases
+          reduced_data <- rv$original_dataset[-outliers$cases, ]
+          all_vars <- c(input$outcome_var, input$predictor_var, input$mediator_vars)
+          if(length(input$covariates) > 0) {
+            all_vars <- c(all_vars, input$covariates)
+          }
+          complete_cases <- complete.cases(reduced_data[all_vars])
+          n_complete <- sum(complete_cases)
+          button_enabled <- (n_complete >= 3)
+        }
+      }, error = function(e) {
+        button_enabled <- FALSE
+      })
+    }
+    
     actionButton("run_analysis_no_outliers", button_text, 
                 class = "btn-warning",
-                style = "width: 100%;")
+                style = "width: 100%;",
+                disabled = !button_enabled)
   })
   
   # Add these observers to handle button states
+  # This observer reacts to changes in variables, thresholds, and covariates
   observe({
+    # Depend on all relevant inputs so button state updates when thresholds change
+    input$residual_threshold
+    input$cooks_threshold_type
+    input$cooks_threshold_custom
+    input$covariates
+    input$outcome_var
+    input$predictor_var
+    input$mediator_vars
+    
     if (is.null(rv$original_dataset) || 
-        is.null(input$outcome_var) || 
-        is.null(input$predictor_var) || 
+        is.null(input$outcome_var) || input$outcome_var == "" ||
+        is.null(input$predictor_var) || input$predictor_var == "" ||
         is.null(input$mediator_vars) || 
         length(input$mediator_vars) == 0) {
       shinyjs::disable("run_analysis")
       shinyjs::disable("run_analysis_no_outliers")
     } else {
       shinyjs::enable("run_analysis")
-      # Check if there are any outliers/influential cases
-      outliers <- identify_outliers()
-      if(outliers$count > 0) {
-        shinyjs::enable("run_analysis_no_outliers")
-      } else {
+      # Check if there are any outliers/influential cases AND if removing them would leave enough cases
+      tryCatch({
+        outliers <- identify_outliers()
+        if(!is.null(outliers) && outliers$count > 0) {
+          # Check if removing outliers would leave enough cases
+          reduced_data <- rv$original_dataset[-outliers$cases, ]
+          all_vars <- c(input$outcome_var, input$predictor_var, input$mediator_vars)
+          if(length(input$covariates) > 0) {
+            all_vars <- c(all_vars, input$covariates)
+          }
+          complete_cases <- complete.cases(reduced_data[all_vars])
+          n_complete <- sum(complete_cases)
+          
+          # Only enable if outliers exist AND removing them leaves at least 3 cases
+          if(n_complete >= 3) {
+            shinyjs::enable("run_analysis_no_outliers")
+          } else {
+            shinyjs::disable("run_analysis_no_outliers")
+          }
+        } else {
+          shinyjs::disable("run_analysis_no_outliers")
+        }
+      }, error = function(e) {
+        # If there's an error identifying outliers, disable the button
         shinyjs::disable("run_analysis_no_outliers")
-      }
+      })
     }
   })
   
