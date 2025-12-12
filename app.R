@@ -42,11 +42,11 @@ ui <- fluidPage(
           numericInput("boot_samples", "Number of bootstrap samples:", 5000, min = 1000, max = 10000)
         ),
         
-        radioButtons("centering", "Centering:",
+        radioButtons("centering", "Mean Centering:",
           choices = list(
             "No centering" = "0",
-            "Mean center" = "1",
-            "Standardize" = "2"
+            "All variables that define products" = "1",
+            "Only continuous variables that define products" = "2"
           ),
           selected = "0"
         ),
@@ -263,8 +263,8 @@ server <- function(input, output, session) {
       "<em>Configuration used for this analysis:</em>",
       paste("Centering:", switch(settings$centering,
         "0" = "No centering",
-        "1" = "Mean centering",
-        "2" = "Standardization"
+        "1" = "All variables that define products",
+        "2" = "Only continuous variables that define products"
       )),
       if(settings$use_bootstrap) paste("Bootstrap samples:", settings$boot_samples),
       paste("Conditioning values:", if(settings$conditioning_values == "0") 
