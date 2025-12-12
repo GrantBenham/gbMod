@@ -289,6 +289,14 @@ ui <- fluidPage(
               plotOutput("scale_location_plot", height = "400px", width = "600px")
             )
           ),
+          
+          # Violin plots for continuous variables (original vs analysis)
+          conditionalPanel(
+            condition = "output.has_continuous_selected === true && output.outcome_is_selected",
+            h4("Continuous Variable Distributions"),
+            p("Distributions are shown for the original dataset and, if cases were removed, the analysis dataset. Only continuous variables are included."),
+            plotOutput("violin_plot", height = "400px", width = "700px")
+          )
         ),
         tabPanel("Moderation Analysis",
           conditionalPanel(
@@ -310,6 +318,20 @@ ui <- fluidPage(
 
 # Define server logic
 server <- function(input, output, session) {
+  # Helper to summarize binary counts (available to entire server)
+  binary_count_lines <- function(data, var, label) {
+    if (is.null(var) || var == "" || is.null(data)) return(NULL)
+    vals <- data[[var]]
+    vals <- vals[!is.na(vals)]
+    if (length(unique(vals)) > 2) return(NULL)
+    tab <- table(vals)
+    levels_sorted <- sort(unique(vals))
+    counts <- sapply(levels_sorted, function(x) tab[as.character(x)])
+    names(counts) <- levels_sorted
+    sprintf("%s (%s): %s", label, var,
+            paste(sprintf("%s = %d", names(counts), counts), collapse = "; "))
+  }
+  
   # Add the new function at the start of the server
   create_formatted_output <- function(analysis_results) {
     # Get settings from analysis results
@@ -367,6 +389,25 @@ server <- function(input, output, session) {
       )),
       ""  # Add blank line before bivariate correlations
     )
+    
+    # Binary counts (only if outcome or moderator is binary)
+    original_counts <- c(
+      binary_count_lines(analysis_results$original_data, settings$outcome_var, "Outcome (original)"),
+      binary_count_lines(analysis_results$original_data, settings$moderator_var, "Moderator (original)")
+    )
+    used_counts <- c(
+      binary_count_lines(analysis_results$data_used, settings$outcome_var, "Outcome (analysis dataset)"),
+      binary_count_lines(analysis_results$data_used, settings$moderator_var, "Moderator (analysis dataset)")
+    )
+    
+    if(length(na.omit(c(original_counts, used_counts))) > 0) {
+      output_text <- c(
+        output_text,
+        "<strong>BINARY VARIABLE COUNTS</strong>",
+        c(original_counts, used_counts),
+        ""
+      )
+    }
     
     # Add bivariate correlations section
     bivariate_cor <- create_bivariate_correlations(
@@ -623,6 +664,125 @@ server <- function(input, output, session) {
     rv$current_dataset <- data
     print(paste("DEBUG - Dataset loaded with", nrow(data), "rows"))  # Add this line
     rv$analysis_results <- NULL  # Reset analysis results when new file is loaded
+  })
+  
+  # Violin plot for continuous variables (original vs analysis dataset)
+  output$violin_plot <- renderPlot({
+    tryCatch({
+      req(rv$original_dataset, input$outcome_var, input$predictor_var, input$moderator_var)
+      
+      # Determine which selected vars are continuous (numeric and not binary)
+      selected_vars <- c(input$outcome_var, input$predictor_var, input$moderator_var)
+      cont_vars <- selected_vars[vapply(selected_vars, function(v) {
+        is_continuous_variable(rv$original_dataset, v)
+      }, logical(1))]
+      
+      # Debugging info
+      message("DEBUG - Violin plot:")
+      message("Selected vars: ", paste(selected_vars, collapse = ", "))
+      message("Continuous vars detected: ", paste(cont_vars, collapse = ", "))
+      
+      if(length(cont_vars) == 0) {
+        plot.new()
+        text(0.5, 0.5, "No continuous variables selected.\nViolin plot not shown.", cex = 1.1)
+        return(NULL)
+      }
+      
+      # Build data for original dataset
+      orig_long <- do.call(rbind, lapply(cont_vars, function(v) {
+        data.frame(
+          variable = v,
+          value = rv$original_dataset[[v]],
+          dataset = "Original",
+          stringsAsFactors = FALSE
+        )
+      }))
+      
+      message("DEBUG - orig_long rows: ", nrow(orig_long))
+      
+      # Optionally add analysis dataset (after removals) if available
+      analysis_long <- NULL
+      ar <- tryCatch(analysis_results(), error = function(e) {
+        message("DEBUG - analysis_results error in violin plot: ", e$message)
+        NULL
+      })
+      if(!is.null(ar)) {
+        used_data <- ar$data_used
+        message("DEBUG - Analysis dataset rows: ", nrow(used_data))
+        analysis_long <- do.call(rbind, lapply(cont_vars, function(v) {
+          data.frame(
+            variable = v,
+            value = used_data[[v]],
+            dataset = if(ar$settings$outliers_removed) "Analysis (after removals)" else "Analysis",
+            stringsAsFactors = FALSE
+          )
+        }))
+      }
+      
+      plot_data <- orig_long
+      if(!is.null(analysis_long)) {
+        plot_data <- rbind(plot_data, analysis_long)
+      }
+      plot_data <- plot_data[!is.na(plot_data$value), ]
+      
+      # Coerce values to numeric to handle labelled types
+      value_class <- class(plot_data$value)
+      message("DEBUG - value class before as.numeric: ", paste(value_class, collapse = ", "))
+      plot_data$value <- suppressWarnings(as.numeric(plot_data$value))
+      
+      # Ensure variable is factor and dataset is factor for plotting
+      plot_data$variable <- factor(plot_data$variable, levels = cont_vars)
+      plot_data$dataset <- factor(plot_data$dataset)
+      
+      message("DEBUG - Plot data rows: ", nrow(plot_data))
+      message("DEBUG - Datasets in plot data: ", paste(unique(plot_data$dataset), collapse = ", "))
+      message("DEBUG - Summary of values:")
+      suppressWarnings(message(paste(capture.output(summary(plot_data$value)), collapse = "\n")))
+      message("DEBUG - Head of plot data:")
+      message(paste(capture.output(head(plot_data)), collapse = "\n"))
+      message("DEBUG - str(plot_data):")
+      message(paste(capture.output(str(plot_data)), collapse = "\n"))
+      
+      if(nrow(plot_data) == 0) {
+        plot.new()
+        text(0.5, 0.5, "No data available for violin plot.", cex = 1.1)
+        return(NULL)
+      }
+      
+      # Build plot with error trapping
+      p <- tryCatch({
+        ggplot(plot_data, aes(x = variable, y = value, fill = dataset)) +
+          geom_violin(trim = FALSE, alpha = 0.5, color = NA) +
+          geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.6) +
+          labs(title = "Continuous Variable Distributions",
+               x = "Variable",
+               y = "Value",
+               fill = "Dataset") +
+          theme_minimal() +
+          theme(
+            text = element_text(size = 14),
+            axis.title = element_text(size = 16),
+            axis.text = element_text(size = 14),
+            plot.title = element_text(size = 18, hjust = 0.5),
+            legend.position = "right"
+          )
+      }, error = function(e) {
+        message("DEBUG - ggplot error: ", conditionMessage(e))
+        NULL
+      })
+      
+      if(is.null(p)) {
+        plot.new()
+        text(0.5, 0.5, "Error generating violin plot (ggplot failed). See console.", cex = 1.1)
+        return(NULL)
+      }
+      
+      print(p)
+    }, error = function(e) {
+      message("DEBUG - Violin plot error: ", e$message)
+      plot.new()
+      text(0.5, 0.5, paste("Error generating violin plot:\n", e$message), cex = 1.1)
+    })
   })
   
   # Reactive to compute Cook's distance threshold
@@ -1078,6 +1238,16 @@ server <- function(input, output, session) {
     return(FALSE)
   }
   
+  # Helper to detect continuous variables (numeric/integer/labelled and not binary)
+  is_continuous_variable <- function(data, var_name) {
+    if(is.null(data) || is.null(var_name) || !var_name %in% names(data)) {
+      return(FALSE)
+    }
+    if(is_binary_variable(data, var_name)) return(FALSE)
+    v <- data[[var_name]]
+    is.numeric(v) || is.integer(v) || inherits(v, "labelled")
+  }
+  
   # Helper function to detect if outcome is binary from PROCESS output
   is_binary_outcome <- reactive({
     req(analysis_results())
@@ -1104,6 +1274,14 @@ server <- function(input, output, session) {
     !is.null(input$outcome_var) && input$outcome_var != ""
   })
   outputOptions(output, "outcome_is_selected", suspendWhenHidden = FALSE)
+  
+  # Output to track if any continuous variables are selected (for violin plot)
+  output$has_continuous_selected <- reactive({
+    req(rv$original_dataset, input$outcome_var, input$predictor_var, input$moderator_var)
+    selected_vars <- c(input$outcome_var, input$predictor_var, input$moderator_var)
+    any(vapply(selected_vars, function(v) is_continuous_variable(rv$original_dataset, v), logical(1)))
+  })
+  outputOptions(output, "has_continuous_selected", suspendWhenHidden = FALSE)
   
   # Output to track if analysis results exist
   output$analysis_ready <- reactive({
@@ -1993,11 +2171,16 @@ server <- function(input, output, session) {
         # For binary outcomes, use logistic regression
         model <- glm(model_formula, data = rv$original_dataset, family = binomial())
         
-        # Get outlier summary
+        # Get outlier/influential summary
         outlier_text <- paste(outlier_summary(), collapse = "<br>")
         
+        # Binary counts for outcome/moderator
+        bin_counts <- c(
+          binary_count_lines(rv$original_dataset, input$outcome_var, "Outcome (original)"),
+          binary_count_lines(rv$original_dataset, input$moderator_var, "Moderator (original)")
+        )
+        
         # For binary outcomes, skip normality and homoscedasticity tests
-        # These assumptions don't apply to logistic regression
         diagnostics <- diagnostic_report(model)
         
         output_text <- paste(
@@ -2008,10 +2191,17 @@ server <- function(input, output, session) {
           "For binary outcomes, different diagnostic approaches are needed:<br>",
           "<ul>",
           "<li><strong>Linearity:</strong> Check linearity of continuous predictors with the logit of the outcome</li>",
-            "<li><strong>Influential observations:</strong> Review leverage values and Cook's distance in the outlier summary above</li>",
+          "<li><strong>Influential observations:</strong> Review leverage values and Cook's distance in the outlier summary above</li>",
           "<li><strong>Model fit:</strong> Use pseudo-R² measures (McFadden, Cox-Snell, Nagelkerke) shown in PROCESS output</li>",
           "<li><strong>Multicollinearity:</strong> VIF can still be calculated for predictors</li>",
           "</ul><br>",
+          if(length(na.omit(bin_counts)) > 0) {
+            paste(
+              "<strong>Binary Variable Counts (original dataset):</strong><br>",
+              paste(bin_counts, collapse = "<br>"),
+              "<br><br>"
+            )
+          } else { "" },
           outlier_text,
           "<br><br>",
           "<strong>Additional Diagnostics:</strong><br>",
@@ -2027,6 +2217,12 @@ server <- function(input, output, session) {
         # Get outlier summary
         outlier_text <- paste(outlier_summary(), collapse = "<br>")
         
+        # Binary counts for outcome/moderator (only if binary)
+        bin_counts <- c(
+          binary_count_lines(rv$original_dataset, input$outcome_var, "Outcome (original)"),
+          binary_count_lines(rv$original_dataset, input$moderator_var, "Moderator (original)")
+        )
+        
         # Run other diagnostics
         normality <- check_normality(model)
         homoscedasticity <- test_homoscedasticity(model)
@@ -2035,6 +2231,13 @@ server <- function(input, output, session) {
         # Create final output
         output_text <- paste(
           "<div style='font-family: Courier, monospace; white-space: pre-wrap;'>",
+          if(length(na.omit(bin_counts)) > 0) {
+            paste(
+              "<strong>Binary Variable Counts (original dataset):</strong><br>",
+              paste(bin_counts, collapse = "<br>"),
+              "<br><br>"
+            )
+          } else { "" },
           outlier_text,
           "<br><br>",
           "<strong>Normality Test:</strong><br>",
