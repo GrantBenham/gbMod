@@ -161,41 +161,60 @@ ui <- fluidPage(
           htmlOutput("assumption_details"),
           
           h4("Diagnostic Plots"),
-          div(style = "margin-bottom: 30px",
-            h5("Normal Q-Q Plot"),
-            p("This plot checks if residuals follow a normal distribution. Points should follow the diagonal line closely.",
-              "Deviations at the ends are common and usually not problematic.",
-              "When bootstrapping is used, normality is less crucial as bootstrap methods don't assume normality.",
-              strong("Note: This plot is not applicable for binary outcomes."), " For binary outcomes, logistic regression does not assume normality of residuals."),
-            plotOutput("qq_plot", height = "400px", width = "600px")
+          conditionalPanel(
+            condition = "output.outcome_is_continuous === true",
+            div(style = "margin-bottom: 30px",
+              h5("Normal Q-Q Plot"),
+              p("This plot checks if residuals follow a normal distribution. Points should follow the diagonal line closely.",
+                "Deviations at the ends are common and usually not problematic.",
+                "When bootstrapping is used, normality is less crucial as bootstrap methods don't assume normality."),
+              plotOutput("qq_plot", height = "400px", width = "600px")
+            )
           ),
           
           div(style = "margin-bottom: 30px",
             h5("Residuals vs Fitted Plot"),
-            p("This plot checks for linearity and homoscedasticity (constant variance).",
-              "Look for:",
-              tags$ul(
-                tags$li("Random scatter around the horizontal line (linearity)"),
-                tags$li("Even spread of points vertically (homoscedasticity)"),
-                tags$li("No clear patterns or curves in the blue line")
-              ),
-              "With bootstrapping, minor violations of homoscedasticity are less concerning."),
+            conditionalPanel(
+              condition = "output.outcome_is_continuous === true",
+              p("This plot checks for linearity and homoscedasticity (constant variance).",
+                "Look for:",
+                tags$ul(
+                  tags$li("Random scatter around the horizontal line (linearity)"),
+                  tags$li("Even spread of points vertically (homoscedasticity)"),
+                  tags$li("No clear patterns or curves in the blue line")
+                ),
+                "With bootstrapping, minor violations of homoscedasticity are less concerning.")
+            ),
+            conditionalPanel(
+              condition = "output.outcome_is_continuous === false",
+              p("For binary outcomes, this plot shows Pearson residuals from logistic regression.",
+                "The patterns will differ from linear regression:",
+                tags$ul(
+                  tags$li("Residuals form distinct bands (one for each outcome level)"),
+                  tags$li("Heteroscedasticity is expected and not a violation"),
+                  tags$li("Focus on identifying potential model misspecification or influential cases")
+                ),
+                "Note: Homoscedasticity is not an assumption of logistic regression.")
+            ),
             plotOutput("residual_plot", height = "400px", width = "600px")
           ),
           
-          # Move heteroscedasticity explanation here
-          div(style = "margin-bottom: 20px",
-            h5("Note on Heteroscedasticity-Consistent Standard Errors"),
-            p("When heteroscedasticity is detected (non-constant variance), PROCESS can apply heteroscedasticity-consistent (HC) standard error estimators. These adjustments modify how standard errors are calculated without changing the actual coefficients:",
-              tags$ul(
-                tags$li(strong("None (Default):"), " Uses standard OLS estimation assuming homoscedasticity"),
-                tags$li(strong("HC0 (Huber-White):"), " The original 'sandwich' estimator, robust but can be biased in small samples"),
-                tags$li(strong("HC1 (Hinkley):"), " A modification of HC0 with small sample correction"),
-                tags$li(strong("HC2:"), " Further refinement that accounts for leverage values"),
-                tags$li(strong("HC3 (Davidson-MacKinnon):"), " Conservative estimator, often recommended for small samples"),
-                tags$li(strong("HC4 (Cribari-Neto):"), " Designed for high-leverage observations")
-              ),
-              "Note: The assumption check results shown here are based on the raw data, regardless of which HC method is selected. The HC selection only affects the standard errors in the PROCESS analysis output."
+          # Move heteroscedasticity explanation here (only for continuous outcomes)
+          conditionalPanel(
+            condition = "output.outcome_is_continuous === true",
+            div(style = "margin-bottom: 20px",
+              h5("Note on Heteroscedasticity-Consistent Standard Errors"),
+              p("When heteroscedasticity is detected (non-constant variance), PROCESS can apply heteroscedasticity-consistent (HC) standard error estimators. These adjustments modify how standard errors are calculated without changing the actual coefficients:",
+                tags$ul(
+                  tags$li(strong("None (Default):"), " Uses standard OLS estimation assuming homoscedasticity"),
+                  tags$li(strong("HC0 (Huber-White):"), " The original 'sandwich' estimator, robust but can be biased in small samples"),
+                  tags$li(strong("HC1 (Hinkley):"), " A modification of HC0 with small sample correction"),
+                  tags$li(strong("HC2:"), " Further refinement that accounts for leverage values"),
+                  tags$li(strong("HC3 (Davidson-MacKinnon):"), " Conservative estimator, often recommended for small samples"),
+                  tags$li(strong("HC4 (Cribari-Neto):"), " Designed for high-leverage observations")
+                ),
+                "Note: The assumption check results shown here are based on the raw data, regardless of which HC method is selected. The HC selection only affects the standard errors in the PROCESS analysis output."
+              )
             )
           ),
           
@@ -294,17 +313,22 @@ server <- function(input, output, session) {
     )
     
     # Process the PROCESS output
-    filtered_output <- analysis_results$output[
-      !grepl("^Bootstrap", analysis_results$output, ignore.case = TRUE) &
-      !grepl("^Percentile bootstrap", analysis_results$output, ignore.case = TRUE) &
-      !grepl("^\\*+ BOOTSTRAP", analysis_results$output) &
-      !grepl("^Level of confidence", analysis_results$output) &
-      !grepl("^\\s*$", analysis_results$output) &
-      !grepl("^\\*+$", analysis_results$output) &
-      !grepl("^\\s*\\|", analysis_results$output) &
-      !grepl("^\\s*\\d+%", analysis_results$output) &
-      !grepl("^\\s*>+\\s*$", analysis_results$output)
+    process_output <- analysis_results$output
+    filtered_output <- process_output[
+      !grepl("^Bootstrap", process_output, ignore.case = TRUE) &
+      !grepl("^Percentile bootstrap", process_output, ignore.case = TRUE) &
+      !grepl("^\\*+ BOOTSTRAP", process_output) &
+      !grepl("^Level of confidence", process_output) &
+      !grepl("^\\s*$", process_output) &
+      !grepl("^\\*+$", process_output) &
+      !grepl("^\\s*\\|", process_output) &
+      !grepl("^\\s*\\d+%", process_output) &
+      !grepl("^\\s*>+\\s*$", process_output)
     ]
+    
+    # Check if outcome is binary (logistic regression)
+    is_binary <- any(grepl("Coding of binary Y for logistic regression", 
+                          process_output, ignore.case = TRUE))
     
     # Process the output to add formatting and section explanations
     processed_output <- character(0)
@@ -352,37 +376,108 @@ server <- function(input, output, session) {
           },
           sprintf("Final sample size: %d", sample_size)
         )
-      } else if(grepl("^Test\\(s\\) of highest order", line)) {
-        processed_output <- c(processed_output,
-          "<br><strong>INTERACTION TEST</strong>",
-          "<em>Tests whether the moderation effect is statistically significant:</em>",
-          "<em>- R2-chng: Amount of additional variance explained by the interaction</em>",
-          "<em>- p-value: Statistical significance of the moderation effect</em>",
-          "<span style='color: red;'>",
-          line,
-          filtered_output[which(filtered_output == line) + 1],
-          gsub("(\\s+[0-9.]+$)", "<strong>\\1</strong>", 
-               filtered_output[which(filtered_output == line) + 2]),
-          "</span>"
-        )
-        skip_next <- 2
+      } else if(grepl("^Test\\(s\\) of highest order|^Likelihood ratio test", line)) {
+        line_idx <- which(filtered_output == line)
+        if(is_binary) {
+          # For binary outcomes, the format is:
+          # "Likelihood ratio test of highest order"
+          # "unconditional interaction(s):"
+          # "       Chi-sq        df         p"
+          # "X*W    1.7972    1.0000    0.1800"
+          # We need to capture all 4 lines
+          if(line_idx + 3 <= length(filtered_output)) {
+            line2 <- filtered_output[line_idx + 1]  # "unconditional interaction(s):"
+            line3 <- filtered_output[line_idx + 2]  # Header line
+            line4 <- filtered_output[line_idx + 3]  # Data line with X*W
+            processed_output <- c(processed_output,
+              "<br><strong>INTERACTION TEST</strong>",
+              "<em>Tests whether the moderation effect is statistically significant (logistic regression):</em>",
+              "<em>- Chi-sq: Likelihood ratio test statistic</em>",
+              "<em>- p-value: Statistical significance of the moderation effect</em>",
+              "<span style='color: red;'>",
+              line,  # "Likelihood ratio test of highest order"
+              line2, # "unconditional interaction(s):"
+              line3, # Header
+              gsub("(\\s+[0-9.]+$)", "<strong>\\1</strong>", line4),  # Data line with bold p-value
+              "</span>"
+            )
+            skip_next <- 3
+          } else {
+            # Fallback if format is different
+            processed_output <- c(processed_output,
+              "<br><strong>INTERACTION TEST</strong>",
+              "<em>Tests whether the moderation effect is statistically significant (logistic regression):</em>",
+              "<em>- Chi-sq: Likelihood ratio test statistic</em>",
+              "<em>- p-value: Statistical significance of the moderation effect</em>",
+              "<span style='color: red;'>",
+              line,
+              if(line_idx + 1 <= length(filtered_output)) filtered_output[line_idx + 1] else "",
+              if(line_idx + 2 <= length(filtered_output)) gsub("(\\s+[0-9.]+$)", "<strong>\\1</strong>", 
+                 filtered_output[line_idx + 2]) else "",
+              "</span>"
+            )
+            skip_next <- 2
+          }
+        } else {
+          # For continuous outcomes, the format is:
+          # "Test(s) of highest order unconditional interaction(s):"
+          # "       R2-chng        df         p"
+          # "X*W    0.0123    1.0000    0.0456"
+          processed_output <- c(processed_output,
+            "<br><strong>INTERACTION TEST</strong>",
+            "<em>Tests whether the moderation effect is statistically significant:</em>",
+            "<em>- R2-chng: Amount of additional variance explained by the interaction</em>",
+            "<em>- p-value: Statistical significance of the moderation effect</em>",
+            "<span style='color: red;'>",
+            line,
+            if(line_idx + 1 <= length(filtered_output)) filtered_output[line_idx + 1] else "",
+            if(line_idx + 2 <= length(filtered_output)) gsub("(\\s+[0-9.]+$)", "<strong>\\1</strong>", 
+               filtered_output[line_idx + 2]) else "",
+            "</span>"
+          )
+          skip_next <- 2
+        }
       } else if(grepl("^Model Summary:", line)) {
-        processed_output <- c(processed_output,
-          "<br><strong>MODEL FIT STATISTICS</strong>",
-          "<em>This section shows how well the overall model fits the data:</em>",
-          "<em>- R-squared indicates the proportion of variance explained</em>",
-          "<em>- F-test shows if the model is significantly better than no predictors</em>",
-          "<br>",
-          line)
+        if(is_binary) {
+          processed_output <- c(processed_output,
+            "<br><strong>MODEL FIT STATISTICS</strong>",
+            "<em>This section shows how well the overall model fits the data (logistic regression):</em>",
+            "<em>- -2LL: -2 times the log-likelihood (lower is better)</em>",
+            "<em>- ModelLL: Model log-likelihood</em>",
+            "<em>- McFadden, Cox-Snell, Nagelkerke: Pseudo-R² measures (analogous to R² in linear regression)</em>",
+            "<em>- p-value: Likelihood ratio test (tests if model is significantly better than null model)</em>",
+            "<br>",
+            line)
+        } else {
+          processed_output <- c(processed_output,
+            "<br><strong>MODEL FIT STATISTICS</strong>",
+            "<em>This section shows how well the overall model fits the data:</em>",
+            "<em>- R-squared indicates the proportion of variance explained</em>",
+            "<em>- F-test shows if the model is significantly better than no predictors</em>",
+            "<br>",
+            line)
+        }
       } else if(grepl("^Model:", line)) {
-        processed_output <- c(processed_output,
-          "<br><strong>REGRESSION COEFFICIENTS</strong>",
-          "<em>Key statistics for each predictor in the model:</em>",
-          "<em>- Coefficient (coeff): The strength and direction of relationships</em>",
-          "<em>- p-value (p): Statistical significance (p < .05 typically considered significant)</em>",
-          "<em>- LLCI/ULCI: 95% confidence intervals (significant if they don't contain zero)</em>",
-          "<br>",
-          line)
+        if(is_binary) {
+          processed_output <- c(processed_output,
+            "<br><strong>REGRESSION COEFFICIENTS</strong>",
+            "<em>Key statistics for each predictor in the model (logistic regression):</em>",
+            "<em>- Coefficient (coeff): Log-odds (logit scale) - the strength and direction of relationships</em>",
+            "<em>- p-value (p): Statistical significance (p < .05 typically considered significant)</em>",
+            "<em>- LLCI/ULCI: 95% confidence intervals for log-odds (significant if they don't contain zero)</em>",
+            "<em>- Note: These coefficients are on the log-odds scale. To interpret as odds ratios, exponentiate (e^coeff)</em>",
+            "<br>",
+            line)
+        } else {
+          processed_output <- c(processed_output,
+            "<br><strong>REGRESSION COEFFICIENTS</strong>",
+            "<em>Key statistics for each predictor in the model:</em>",
+            "<em>- Coefficient (coeff): The strength and direction of relationships</em>",
+            "<em>- p-value (p): Statistical significance (p < .05 typically considered significant)</em>",
+            "<em>- LLCI/ULCI: 95% confidence intervals (significant if they don't contain zero)</em>",
+            "<br>",
+            line)
+        }
       } else if(grepl("^Covariance matrix", line)) {
         processed_output <- c(processed_output,
           "<br><strong>COVARIANCE MATRIX</strong>",
