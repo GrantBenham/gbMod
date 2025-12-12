@@ -151,78 +151,113 @@ ui <- fluidPage(
         tabPanel("Assumption Checks",
           h4("Detailed Assumption Check Results"),
           
-          # Add new explanatory note at the top
-          div(style = "margin-bottom: 20px",
-            p(strong("Note:"), " These assumption checks are always performed on the original dataset. Results update automatically based on your selected variables and standardized residual threshold value."),
-            p(strong("Binary Outcomes:"), " If your outcome variable is binary (0/1), the app will automatically use logistic regression diagnostics. Standard regression assumptions (normality, homoscedasticity) do not apply to binary outcomes.")
+          # Show a prompt until variables are selected
+          conditionalPanel(
+            condition = "!output.outcome_is_selected",
+            div(style = "margin-bottom: 20px",
+              p("Select your outcome, predictor, and moderator to view assumption guidance and diagnostics.")
+            )
           ),
           
-          div(style = "margin-bottom: 20px",
-            h5("Understanding Standardized Residual Outliers"),
-            p("Standardized residuals (SR) represent how many standard deviations an observed value deviates from the model's prediction. Outliers can affect moderation analyses in several ways:",
-              tags$ul(
-                tags$li(strong("Impact on Results:"), " Outliers can inflate or deflate moderation effects and influence statistical significance"),
-                tags$li(strong("Threshold Guidelines:"), " Common cutoffs include:"),
+          # Continuous outcome guidance
+          conditionalPanel(
+            condition = "output.outcome_is_selected && output.outcome_is_continuous === true",
+            div(style = "margin-bottom: 20px",
+              p(strong("Note:"), " These assumption checks are always performed on the original dataset. Results update automatically based on your selected variables and standardized residual threshold value.")
+            ),
+            div(style = "margin-bottom: 20px",
+              h5("Understanding Standardized Residual Outliers"),
+              p("Standardized residuals (SR) represent how many standard deviations an observed value deviates from the model's prediction. Outliers can affect moderation analyses in several ways:",
                 tags$ul(
-                  tags$li("|SR| > 2: Potentially influential cases"),
-                  tags$li("|SR| > 2.5: More stringent criterion"),
-                  tags$li("|SR| > 3: Very conservative criterion")
+                  tags$li(strong("Impact on Results:"), " Outliers can inflate or deflate moderation effects and influence statistical significance"),
+                  tags$li(strong("Threshold Guidelines:"), " Common cutoffs include:"),
+                  tags$ul(
+                    tags$li("|SR| > 2: Potentially influential cases"),
+                    tags$li("|SR| > 2.5: More stringent criterion"),
+                    tags$li("|SR| > 3: Very conservative criterion")
+                  ),
+                  tags$li(strong("Handling Outliers:"), " This program offers two approaches:"),
+                  tags$ul(
+                    tags$li("Run analysis with all cases to maintain complete data"),
+                    tags$li("Remove cases above the threshold to assess impact on results")
+                  ),
+                  tags$li(strong("Bootstrapping Consideration:"), " While bootstrapping can make analyses more robust to violations of normality, it does not directly address the impact of outliers. Consider running analyses both with and without outliers to assess their influence.")
                 ),
-                tags$li(strong("Handling Outliers:"), " This program offers two approaches:"),
+                "Note: The decision to remove outliers should be based on both statistical criteria and theoretical considerations. Document and justify any case removals in your research."
+              )
+            )
+          ),
+          
+          # Binary outcome guidance
+          conditionalPanel(
+            condition = "output.outcome_is_selected && output.outcome_is_continuous === false",
+            div(style = "margin-bottom: 20px",
+              p(strong("Note:"), " For binary outcomes (0/1), the app uses logistic regression diagnostics. Normality and homoscedasticity assumptions do not apply.")
+            ),
+            div(style = "margin-bottom: 20px",
+              h5("Understanding Influential Cases (Cook's Distance)"),
+              p("Cook's distance measures the influence of each case on all parameter estimates. High values suggest influential cases:",
                 tags$ul(
-                  tags$li("Run analysis with all cases to maintain complete data"),
-                  tags$li("Remove cases above the threshold to assess impact on results")
+                  tags$li(strong("Impact on Results:"), " Influential cases can materially change coefficient estimates and significance"),
+                  tags$li(strong("Threshold Guidelines:"), " Common choices: 4/n (conservative), 1.0 (liberal), or a custom threshold"),
+                  tags$li(strong("Handling Influential Cases:"), " This program offers two approaches:"),
+                  tags$ul(
+                    tags$li("Run analysis with all cases to maintain sample size"),
+                    tags$li("Remove cases with Cook's D above the threshold to assess impact")
+                  )
                 ),
-                tags$li(strong("Bootstrapping Consideration:"), " While bootstrapping can make analyses more robust to violations of normality, it does not directly address the impact of outliers. Consider running analyses both with and without outliers to assess their influence.")
-              ),
-              "Note: The decision to remove outliers should be based on both statistical criteria and theoretical considerations. Document and justify any case removals in your research."
+                "Note: The decision to remove influential cases should consider both statistical criteria and theory. Document and justify any removals."
+              )
             )
           ),
           
           htmlOutput("assumption_details"),
           
-          h4("Diagnostic Plots"),
           conditionalPanel(
-            condition = "output.outcome_is_continuous === true",
-            div(style = "margin-bottom: 30px",
-              h5("Normal Q-Q Plot"),
-              p("This plot checks if residuals follow a normal distribution. Points should follow the diagonal line closely.",
-                "Deviations at the ends are common and usually not problematic.",
-                "When bootstrapping is used, normality is less crucial as bootstrap methods don't assume normality."),
-              plotOutput("qq_plot", height = "400px", width = "600px")
-            )
-          ),
-          
-          div(style = "margin-bottom: 30px",
-            h5("Residuals vs Fitted Plot"),
+            condition = "output.outcome_is_selected",
+            h4("Diagnostic Plots"),
             conditionalPanel(
               condition = "output.outcome_is_continuous === true",
-              p("This plot checks for linearity and homoscedasticity (constant variance).",
-                "Look for:",
-                tags$ul(
-                  tags$li("Random scatter around the horizontal line (linearity)"),
-                  tags$li("Even spread of points vertically (homoscedasticity)"),
-                  tags$li("No clear patterns or curves in the blue line")
-                ),
-                "With bootstrapping, minor violations of homoscedasticity are less concerning.")
+              div(style = "margin-bottom: 30px",
+                h5("Normal Q-Q Plot"),
+                p("This plot checks if residuals follow a normal distribution. Points should follow the diagonal line closely.",
+                  "Deviations at the ends are common and usually not problematic.",
+                  "When bootstrapping is used, normality is less crucial as bootstrap methods don't assume normality."),
+                plotOutput("qq_plot", height = "400px", width = "600px")
+              )
             ),
-            conditionalPanel(
-              condition = "output.outcome_is_continuous === false",
-              p("For binary outcomes, this plot shows Pearson residuals from logistic regression.",
-                "The patterns will differ from linear regression:",
-                tags$ul(
-                  tags$li("Residuals form distinct bands (one for each outcome level)"),
-                  tags$li("Heteroscedasticity is expected and not a violation"),
-                  tags$li("Focus on identifying potential model misspecification or influential cases")
-                ),
-                "Note: Homoscedasticity is not an assumption of logistic regression.")
-            ),
-            plotOutput("residual_plot", height = "400px", width = "600px")
+            
+            div(style = "margin-bottom: 30px",
+              h5("Residuals vs Fitted Plot"),
+              conditionalPanel(
+                condition = "output.outcome_is_continuous === true",
+                p("This plot checks for linearity and homoscedasticity (constant variance).",
+                  "Look for:",
+                  tags$ul(
+                    tags$li("Random scatter around the horizontal line (linearity)"),
+                    tags$li("Even spread of points vertically (homoscedasticity)"),
+                    tags$li("No clear patterns or curves in the blue line")
+                  ),
+                  "With bootstrapping, minor violations of homoscedasticity are less concerning.")
+              ),
+              conditionalPanel(
+                condition = "output.outcome_is_continuous === false",
+                p("For binary outcomes, this plot shows Pearson residuals from logistic regression.",
+                  "The patterns will differ from linear regression:",
+                  tags$ul(
+                    tags$li("Residuals form distinct bands (one for each outcome level)"),
+                    tags$li("Heteroscedasticity is expected and not a violation"),
+                    tags$li("Focus on identifying potential model misspecification or influential cases")
+                  ),
+                  "Note: Homoscedasticity is not an assumption of logistic regression.")
+              ),
+              plotOutput("residual_plot", height = "400px", width = "600px")
+            )
           ),
           
           # Move heteroscedasticity explanation here (only for continuous outcomes)
           conditionalPanel(
-            condition = "output.outcome_is_continuous === true",
+            condition = "output.outcome_is_continuous === true && output.outcome_is_selected",
             div(style = "margin-bottom: 20px",
               h5("Note on Heteroscedasticity-Consistent Standard Errors"),
               p("When heteroscedasticity is detected (non-constant variance), PROCESS can apply heteroscedasticity-consistent (HC) standard error estimators. These adjustments modify how standard errors are calculated without changing the actual coefficients:",
@@ -256,14 +291,17 @@ ui <- fluidPage(
           ),
         ),
         tabPanel("Moderation Analysis",
-          h4("Analysis Results"),
-          htmlOutput("analysis_output"),
-          
-          h4("Johnson-Neyman Plot"),
-          plotOutput("jn_plot", height = "500px", width = "800px"),
-          
-          h4("Simple Slopes Plot"),
-          plotOutput("slopes_plot", height = "500px", width = "800px")
+          conditionalPanel(
+            condition = "output.analysis_ready === true",
+            h4("Analysis Results"),
+            htmlOutput("analysis_output"),
+            
+            h4("Johnson-Neyman Plot"),
+            plotOutput("jn_plot", height = "500px", width = "800px"),
+            
+            h4("Simple Slopes / Probability Plot"),
+            plotOutput("slopes_plot", height = "500px", width = "800px")
+          )
         )
       )
     )
@@ -1060,6 +1098,18 @@ server <- function(input, output, session) {
     !is_binary_variable(rv$original_dataset, input$outcome_var)
   })
   outputOptions(output, "outcome_is_continuous", suspendWhenHidden = FALSE)
+  
+  # Output to track if outcome is selected (for conditionalPanel)
+  output$outcome_is_selected <- reactive({
+    !is.null(input$outcome_var) && input$outcome_var != ""
+  })
+  outputOptions(output, "outcome_is_selected", suspendWhenHidden = FALSE)
+  
+  # Output to track if analysis results exist
+  output$analysis_ready <- reactive({
+    !is.null(analysis_results())
+  })
+  outputOptions(output, "analysis_ready", suspendWhenHidden = FALSE)
   
   # Update JN availability based on moderator being dichotomous
   observe({
